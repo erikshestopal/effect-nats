@@ -1,0 +1,61 @@
+name: test transport-node with local modules
+
+on:
+  push:
+    paths:
+      - "core/**"
+      - "jetstream/**"
+      - "kv/**"
+      - "obj/**"
+      - "services/**"
+      - "nst/**"
+    branches:
+      - "*"
+  pull_request:
+    branches: [main]
+    types: [opened]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        deno-version: [2.7.x]
+        node-version: [25.x]
+
+    name: test node transport with local dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Git Checkout Core
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Use Deno Version ${{ matrix.deno-version }}
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: ${{ matrix.deno-version }}
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install nats-server
+        uses: aricart/install-binary@v2.0.0
+        with:
+          repo: nats-io/nats-server
+          name: nats-server
+
+      - name: Build workspace
+        run: |
+          npm install --workspaces
+          npm run build --workspaces
+
+
+      - name: Test Node Transport with local dependencies
+        working-directory: transport-node
+        env:
+          CI: true
+        run: |
+          npm test

@@ -1,0 +1,54 @@
+name: Workspace Node Tests
+
+on:
+  workflow_call:
+
+jobs:
+  node-tests-workspace:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        deno-version: [2.7.x]
+        node-version: [25.x]
+
+    steps:
+      - name: Git Checkout Sources
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install Deno ${{ matrix.deno-version }}
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: ${{ matrix.deno-version }}
+
+      - name: Install nats-server
+        uses: aricart/install-binary@v2.0.0
+        with:
+          repo: nats-io/nats-server
+          name: nats-server
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Test Node with Workspace Dependencies
+        env:
+          NGS_CI_USER: ${{ secrets.NGS_CI_USER }}
+          TMPDIR: ${{ runner.temp }}
+          CI: true
+        run: |
+          npm install --workspaces
+          npm run prepack --workspaces
+          npm run coverage --workspace transport-node
+
+      - name: Upload coverage
+        uses: coverallsapp/github-action@v2
+        continue-on-error: true
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          parallel: true
+          flag-name: transport-node
+          file: ./transport-node/out.lcov
+
