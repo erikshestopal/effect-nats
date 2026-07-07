@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
-import * as Greeting from "@effect-nats/core/Greeting";
+import * as Greeting from "effect-nats/Greeting";
 
 describe("Greeting.make", () => {
   it.effect("creates a schema-backed greeting", () =>

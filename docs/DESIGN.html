@@ -1,0 +1,1461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>effect-nats — Design</title>
+<style>
+  :root {
+    --bg: #0e181c;
+    --bg-inset: #0b1418;
+    --fg: #ccd8dc;
+    --bright: #e8f0f2;
+    --muted: #6f8790;
+    --border: #35484f;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    font-family: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", monospace;
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--fg);
+    background: var(--bg);
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 48px 24px 96px;
+  }
+  nav {
+    border-top: 1px dotted var(--border);
+    padding-top: 10px;
+    margin-bottom: 48px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+  }
+  nav a { color: var(--muted); text-decoration: none; margin-right: 18px; }
+  nav a.current { color: var(--bright); text-decoration: underline; }
+  nav a:hover { color: var(--bright); }
+  h1 {
+    font-size: 18px;
+    color: var(--bright);
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .subtitle { color: var(--muted); margin-bottom: 8px; }
+  section { margin-top: 48px; }
+  h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--bright);
+    border-top: 1px dotted var(--border);
+    padding-top: 14px;
+    margin-bottom: 16px;
+    font-weight: 700;
+  }
+  h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--muted);
+    margin: 22px 0 10px;
+    font-weight: 700;
+  }
+  p { margin-bottom: 14px; }
+  strong { color: var(--bright); font-weight: 700; }
+  em { font-style: italic; }
+  a { color: var(--fg); }
+  code {
+    color: var(--bright);
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    padding: 0 4px;
+    font-size: 12.5px;
+  }
+  pre {
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    padding: 14px 16px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    overflow-x: auto;
+    margin: 16px 0;
+    color: var(--fg);
+  }
+  pre code { border: none; background: none; padding: 0; color: inherit; }
+  pre .k { color: var(--bright); }
+  pre .c { color: var(--muted); }
+  ul, ol { margin: 0 0 14px 22px; }
+  li { margin-bottom: 4px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 16px 0;
+    font-size: 12.5px;
+  }
+  th {
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: .1em;
+    color: var(--muted);
+    text-align: left;
+    font-weight: 700;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    vertical-align: top;
+  }
+  td code { border: none; padding: 0 2px; }
+  .verdict {
+    border: 1px solid var(--border);
+    padding: 14px 16px;
+    margin: 18px 0;
+  }
+  .verdict .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .table-scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="current" href="#">design</a>
+  <a href="#jetstream">jetstream</a>
+  <a href="#kv">kv</a>
+  <a href="#objectstore">objects</a>
+  <a href="#micro">services</a>
+  <a href="#surface">public surface</a>
+  <a href="#plan">implementation plan</a>
+</nav>
+
+<h1>effect-nats: an Effect-native client for NATS</h1>
+<p class="subtitle">Design document · draft for review · 2026-07-07 · rev 2 (full surface: core + JetStream + KV + ObjectStore + Services)</p>
+<p class="subtitle">Sources of truth: <code>repos/nats.js</code> (client v3 monorepo) and <code>repos/effect-v4</code> (Effect v4 pre-release).</p>
+
+<!-- ================================================================ -->
+<section id="problem">
+<h2>1. The problem: two resource-management worlds</h2>
+
+<p>NATS ships an excellent TypeScript client. It manages a socket, speaks the
+wire protocol, reconnects, and hands you messages. It expresses all of this in
+the standard vocabulary of JavaScript: promises for one-shot operations, async
+iterables for message flows, thrown <code>Error</code> subclasses for failure,
+and manual <code>close()</code>/<code>drain()</code> calls for cleanup.</p>
+
+<p>An Effect program has a different vocabulary for exactly the same concerns.
+Failures are values in a typed error channel, not thrown exceptions. Anything
+that must be cleaned up is tied to a <code>Scope</code>, so cleanup happens
+even when a fiber is interrupted. Long-lived flows of values are
+<code>Stream</code>s, which compose with retry policies, batching, and
+concurrency operators. Dependencies arrive through the context as services
+provided by <code>Layer</code>s, so a test can swap the real connection for a
+fake one without touching call sites.</p>
+
+<p>When you use the raw NATS client inside an Effect program, you sit at the
+seam between these two worlds and hand-translate at every call site:
+<code>Effect.tryPromise</code> here, an <code>acquireRelease</code> there, an
+untyped <code>catch</code> block guessing which of eleven error classes you
+got. Every service that touches NATS re-invents this translation, slightly
+differently, with slightly different bugs. The translation is mechanical,
+which is precisely why it should be written once, in one library, and never
+again.</p>
+
+<p>That is the entire ambition of this design: <strong>a thin, total
+translation layer over the whole client surface</strong> — the core
+connection, JetStream (persistence), KV, ObjectStore, and the Services
+framework. We do not reimplement the protocol parser, the reconnect loop, or
+the consumer bookkeeping — the vendored <code>@nats-io/*</code> packages
+already do those things well and are maintained by the NATS team. We wrap
+their public surfaces so that, from the Effect side, NATS looks like it was
+born there. The precedent inside Effect itself is
+<code>@effect/ai-anthropic</code>, which wraps the Anthropic HTTP API behind a
+<code>Context.Service</code> without re-deriving HTTP, and
+<code>effect/unstable/socket</code>, which defines one socket interface and
+lets each runtime provide it as a layer.</p>
+
+<p><strong>The cost of wrapping instead of rewriting</strong>: we inherit the
+SDK's operational behavior wholesale — its buffering decisions, its reconnect
+semantics, its module-global transport registry (§4 prices that one
+honestly). Where the SDK's behavior is un-Effect-like, we can only paper over
+it, not fix it. We accept that trade because the alternative — maintaining a
+protocol implementation — is a full-time job the NATS team is already doing.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="nats">
+<h2>2. NATS in one section</h2>
+
+<p>NATS is a message router. A client opens one TCP or WebSocket connection to
+a server and sends messages labeled with a <em>subject</em> — a dot-separated
+string like <code>orders.eu.created</code>. Other clients declare interest in
+subjects, with wildcards (<code>orders.*.created</code>,
+<code>orders.&gt;</code>). The server copies each incoming message to every
+matching interest. That declared interest is a <em>subscription</em>.</p>
+
+<p>Calibrate against Kafka, since that is the mental model most engineers
+carry: NATS core is Kafka minus the log, minus partitions, minus consumer
+groups, minus retention. Messages are not stored; if nobody is subscribed at
+the instant a message passes through the server, it is gone. What you get in
+exchange is sub-millisecond fan-out, no broker state to administer per topic
+(subjects are just strings, never "created"), and millions of subjects for
+free. The missing log is bolted back on by a layer called JetStream — in
+scope for this design, derived properly in §11.</p>
+
+<p>Two conventions built from these primitives matter for our API surface.
+First, if several subscribers join the same subject under a shared
+<em>queue group</em> name, the server delivers each message to exactly one of
+them — load balancing without a coordinator. Second, a publisher can attach a
+<em>reply subject</em> to a message; a responder publishes its answer to that
+subject, and the requesting client subscribes to it beforehand. That
+publish-plus-ephemeral-subscription pattern is <em>request/reply</em>, and the
+SDK wraps it in a single <code>request()</code> call. The server even
+short-circuits the failure case: if a request goes to a subject with no
+subscribers, the server immediately sends back a <code>503</code>-status
+message, which the SDK surfaces as <code>NoRespondersError</code> instead of
+letting you wait out a timeout.</p>
+
+<pre>
+  publisher                     nats-server                    subscribers
+  ---------                     -----------                    -----------
+  PUB orders.eu.created  ───▶   match "orders.*.created" ───▶  svc-a (queue "billing")
+  (payload: 143 bytes)          match "orders.&gt;"        ───▶   svc-b
+                                                        ───▶   svc-c (queue "billing")
+                                one of {svc-a, svc-c} gets it (queue group);
+                                svc-b always gets it (plain subscription);
+                                nothing is stored anywhere
+</pre>
+
+<p>The consequence for our design: the core client object is small. One
+connection, four verbs — publish, subscribe, request, drain — plus
+connection-lifecycle observation. Everything else in this document (JetStream,
+KV, ObjectStore, Services) is built by the upstream SDK <em>on top of</em>
+these verbs, over the same single connection — which is why our wrapper
+composes the same way, layer by layer.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="boundary">
+<h2>3. Inventory of the boundary</h2>
+
+<p>Everything the core wrapper must translate appears in
+<code>repos/nats.js/core/src/core.ts</code>. The table below is the map for
+the core client; each row is derived in its own section afterward. (§11–§14
+extend the same table to JetStream, KV, ObjectStore, and Services — the
+translation vocabulary stays identical, which is the point.) The right column
+is the shape an Effect v4 program expects, using constructs that exist today
+in <code>repos/effect-v4</code>.</p>
+
+<div class="table-scroll">
+<table>
+<tr><th>SDK construct (nats.js v3)</th><th>Shape</th><th>Effect construct</th></tr>
+<tr><td><code>connect(opts) / wsconnect(opts)</code></td><td><code>Promise&lt;NatsConnection&gt;</code></td><td>Scoped service via <code>Context.Service</code> + <code>Layer</code> (§4)</td></tr>
+<tr><td><code>ConnectionOptions</code></td><td>flat mutable-ish options bag, secrets as <code>string</code></td><td><code>Options</code> with <code>Redacted</code>, <code>Duration.Input</code>, tagged <code>Auth</code> union; <code>layerConfig</code> for env (§5)</td></tr>
+<tr><td>11 thrown <code>Error</code> subclasses (<code>errors.ts</code>)</td><td>untyped <code>throw</code>/rejection</td><td><code>Schema.TaggedErrorClass</code> per failure, typed error channel (§6)</td></tr>
+<tr><td><code>Msg</code></td><td>mutable-ish record, <code>reply?: string</code>, throwing <code>json()</code></td><td><code>NatsMessage</code>: immutable view, <code>Option</code> for reply, <code>Schema</code>-based decoding (§7)</td></tr>
+<tr><td><code>nc.subscribe() → Subscription extends AsyncIterable&lt;Msg&gt;</code></td><td>async iterable + manual <code>unsubscribe/drain</code></td><td><code>Stream&lt;NatsMessage, NatsError&gt;</code>, cleanup bound to scope (§8)</td></tr>
+<tr><td><code>nc.request()</code></td><td><code>Promise&lt;Msg&gt;</code>, ms timeout</td><td><code>Effect&lt;NatsMessage, TimeoutError | NoRespondersError | ...&gt;</code> (§9)</td></tr>
+<tr><td><code>nc.requestMany()</code></td><td><code>Promise&lt;AsyncIterable&lt;Msg&gt;&gt;</code></td><td><code>Stream&lt;NatsMessage, ...&gt;</code> (§9)</td></tr>
+<tr><td><code>nc.status()</code></td><td><code>AsyncIterable&lt;Status&gt;</code> (11-variant union)</td><td><code>Stream&lt;ConnectionStatus&gt;</code>, never-failing (§10)</td></tr>
+<tr><td><code>nc.drain() / close() / closed()</code></td><td>manual promises</td><td>scope finalizer; <code>closed</code> exposed as an Effect (§10)</td></tr>
+<tr><td><code>MsgHdrs</code></td><td>mutable, iterable, throwing getters</td><td><code>NatsHeaders</code>: immutable view, <code>Option</code> getters (§7)</td></tr>
+<tr><td><code>setTransportFactory</code> (module-global)</td><td>implicit, set by whichever <code>connect</code> you import</td><td>explicit <code>NatsConnector</code> service, one layer per transport (§4)</td></tr>
+</table>
+</div>
+
+<p>Note what is <em>absent</em> from the right column: no hand-rolled subject
+parser, no custom promise helpers, no bespoke option validation. Effect v4
+already ships <code>Option</code>, <code>Duration</code>, <code>Redacted</code>,
+<code>Config</code>, <code>Schema</code> (including
+<code>Schema.fromJsonString</code>), <code>Stream.fromAsyncIterable</code>,
+<code>Stream.callback</code>, <code>Stream.paginate</code>, and
+<code>Stream.fromReadableStream</code>/<code>toReadableStreamWith</code>. The
+wrapper's job is composition, not invention.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="connection">
+<h2>4. The connection as a scoped service</h2>
+
+<h3>4.1 Why a service, and which idiom</h3>
+
+<p>A NATS connection is expensive (TCP handshake, INFO/CONNECT exchange,
+optional TLS upgrade), long-lived, and shared by everything in the process
+that talks to NATS. That is the textbook profile of an Effect
+<em>service</em>: constructed once, placed in the context, torn down when its
+scope closes. Effect v4's idiom for this is the class-style
+<code>Context.Service</code> — the class itself is the tag, is yieldable, and
+carries <code>.of()</code> — with construction exposed as <code>make</code>
+(an effect) and provision as <code>layer</code> /
+<code>layerConfig</code>. This is letter-for-letter the shape of
+<code>AnthropicClient</code> in <code>repos/effect-v4/packages/ai/anthropic</code>:</p>
+
+<pre>
+export class NatsClient extends Context.Service&lt;NatsClient, Service&gt;()(
+  "effect-nats/NatsClient"
+) {}
+
+export const make: (options?: Options) =&gt;
+  Effect.Effect&lt;Service, ConnectionError | TimeoutError, NatsConnector | Scope.Scope&gt;
+
+export const layer: (options?: Options) =&gt;
+  Layer.Layer&lt;NatsClient, ConnectionError | TimeoutError, NatsConnector&gt;
+</pre>
+
+<p>Acquisition wraps the SDK's <code>connect()</code> promise in
+<code>Effect.acquireRelease</code>. Release runs <code>drain()</code> — the
+SDK's ordered shutdown, which finishes in-flight messages before closing —
+falling back to <code>close()</code> if draining fails or exceeds a bounded
+timeout. Interruption of any fiber holding the scope therefore cannot leak a
+socket, which is the property the raw SDK cannot give you.</p>
+
+<h3>4.2 Transports: derive the design from the SDK's one global</h3>
+
+<p>Here the SDK has a sharp edge we must design around rather than inherit.
+nats.js selects its transport through a <em>module-global</em> factory:
+<code>connect()</code> from <code>@nats-io/transport-node</code> calls
+<code>setTransportFactory(tcp)</code> and then dials;
+<code>wsconnect()</code> from core calls
+<code>setTransportFactory(websocket)</code> and then dials
+(<code>core/src/ws_transport.ts:354</code>,
+<code>transport-node/src/connect.ts</code>). Both funnel into the same
+<code>NatsConnectionImpl.connect</code>. So "which transport" is not a
+per-connection option — it is ambient mutable state, decided by which entry
+function you happened to import.</p>
+
+<p>We make that decision explicit and typed: a second, tiny service whose only
+job is to know how to dial.</p>
+
+<pre>
+export class NatsConnector extends Context.Service&lt;NatsConnector, Connector&gt;()(
+  "effect-nats/NatsConnector"
+) {}
+
+export interface Connector {
+  readonly connect: (options: ConnectionOptions) =&gt;
+    Effect.Effect&lt;NatsConnection, ConnectionError | TimeoutError&gt;
+}
+
+<span class="c">// in NatsConnector.ts — zero extra dependencies, wsconnect ships in nats-core.</span>
+<span class="c">// Uses globalThis.WebSocket (Node ≥ 22 stable, Bun, browsers); pass wsFactory</span>
+<span class="c">// via transformOptions for runtimes without it or for custom headers.</span>
+export const layerWebSocket: Layer.Layer&lt;NatsConnector&gt;
+
+<span class="c">// in NodeConnector.ts — raw TCP via @nats-io/transport-node. Node and Bun.</span>
+<span class="c">// Lives in its own module file so WebSocket-only bundles never load node:net.</span>
+export const layer: Layer.Layer&lt;NatsConnector&gt;
+</pre>
+
+<p>This mirrors <code>effect/unstable/socket</code> exactly: one abstract
+interface in the shared module, one layer per runtime
+(<code>NodeSocket.layerNet</code>, <code>BunSocket</code>,
+<code>Socket.layerWebSocket</code>). An application composes:</p>
+
+<pre>
+const NatsLive = NatsClient.layer({ servers: "nats://10.0.0.7:4222" }).pipe(
+  Layer.provide(NodeConnector.layer)        <span class="c">// or NatsConnector.layerWebSocket</span>
+)
+</pre>
+
+<pre>
+        ┌──────────────────────────────┐
+        │        application           │
+        │   yield* NatsClient          │
+        └──────────────┬───────────────┘
+                       │ requires
+        ┌──────────────▼───────────────┐
+        │  NatsClient.layer(options)   │   scoped: acquire = connect()
+        │                              │           release = drain() → close()
+        └──────────────┬───────────────┘
+                       │ requires
+        ┌──────────────▼───────────────┐
+        │        NatsConnector         │   one of:
+        ├──────────────────────────────┤
+        │ NodeConnector.layer          │──▶ @nats-io/transport-node  (TCP, node/bun)
+        │ NatsConnector.layerWebSocket │──▶ wsconnect / nats-core    (WS, node≥22/bun/browser)
+        └──────────────────────────────┘
+</pre>
+
+<p><strong>The honestly-priced failure mode</strong>: the global factory is
+still global underneath us. Two fibers concurrently building one TCP-backed
+client and one WebSocket-backed client in the same process can interleave
+<code>setTransportFactory</code> calls and dial the wrong transport. The
+wrapper serializes connection establishment behind a module-level
+<code>Semaphore</code> (Effect has one; <code>effect/Semaphore</code>) so the
+set-then-dial pair is atomic <em>within our library</em>. Code that bypasses
+us and calls the SDK directly can still race us. We document this rather than
+pretend to fix it; fixing it for real is an upstream change.</p>
+
+<h3>4.3 The escape hatch</h3>
+
+<p>The service exposes the raw connection as
+<code>readonly connection: NatsConnection</code>. Every wrapper that hides its
+SDK eventually strands a user one missing feature away from forking it; the
+Anthropic wrapper exposes its generated client for the same reason. Using the
+escape hatch means leaving typed-error land — that is the visible, priced
+cost, and it is the right default for the 1% of calls we don't cover
+(<code>publishMessage</code>, <code>reconnect()</code>,
+<code>setServers</code>, stats plumbing).</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="config">
+<h2>5. Configuration</h2>
+
+<p>The SDK's <code>ConnectionOptions</code> is a flat bag of ~25 fields with
+three problems from an Effect standpoint: secrets are plain strings
+(<code>pass</code>, <code>token</code>), durations are bare millisecond
+numbers (<code>timeout</code>, <code>pingInterval</code>,
+<code>reconnectTimeWait</code>), and the four mutually-exclusive
+authentication mechanisms (user/pass, token, creds file, nkey/JWT) are
+expressed as optional fields whose invalid combinations fail at runtime.</p>
+
+<p>Our <code>Options</code> type fixes each with the module Effect already
+ships for it, and nothing more:</p>
+
+<pre>
+export type Options = {
+  readonly servers?: string | ReadonlyArray&lt;string&gt;
+  readonly name?: string
+  readonly auth?: Auth                       <span class="c">// tagged union, below</span>
+  readonly timeout?: Duration.Input          <span class="c">// @default "20 seconds"</span>
+  readonly pingInterval?: Duration.Input     <span class="c">// @default "2 minutes"</span>
+  readonly maxPingOut?: number
+  readonly reconnect?: boolean | ReconnectOptions
+  readonly noEcho?: boolean
+  readonly inboxPrefix?: string
+  readonly tls?: TlsOptions
+  readonly ignoreClusterUpdates?: boolean
+  <span class="c">// escape hatch, mirroring AnthropicClient's transformClient:</span>
+  readonly transformOptions?: ((options: ConnectionOptions) =&gt; ConnectionOptions)
+}
+
+export type ReconnectOptions = {
+  readonly maxAttempts?: number              <span class="c">// -1 = forever</span>
+  readonly wait?: Duration.Input             <span class="c">// @default "2 seconds"</span>
+  readonly jitter?: Duration.Input
+  readonly waitOnFirstConnect?: boolean
+}
+
+export type Auth =
+  | { readonly _tag: "UserPass"; readonly user: string; readonly pass: Redacted.Redacted&lt;string&gt; }
+  | { readonly _tag: "Token";    readonly token: Redacted.Redacted&lt;string&gt; }
+  | { readonly _tag: "Creds";    readonly creds: Redacted.Redacted&lt;string&gt; }  <span class="c">// .creds file contents</span>
+  | { readonly _tag: "NKey";     readonly seed: Redacted.Redacted&lt;string&gt; }
+</pre>
+
+<p>The tagged union is translated internally to the SDK's
+<code>credsAuthenticator</code> / <code>nkeyAuthenticator</code> /
+<code>tokenAuthenticator</code> / <code>usernamePasswordAuthenticator</code>
+(all exported from nats-core), with <code>Redacted.value</code> unwrapped at
+the last possible moment. A constructor per variant
+(<code>NatsClient.authToken({ token })</code>, …) keeps call sites free of
+<code>_tag</code> literals.</p>
+
+<p>A note on optionality, since it is a project conviction: <code>Option</code>
+is for <em>model</em> positions — data flowing through the program whose
+absence a consumer branches on (<code>NatsMessage.replyTo</code>,
+<code>NatsKv.get</code>). Options bags are <em>input</em> positions where
+absence means "use the default". This repository enables
+<code>exactOptionalPropertyTypes</code> <em>and</em> forbids nullish unions
+via the <code>no-nullish-types</code> ast-grep rule, so the normative
+spelling — used throughout this document and in the implementation — is
+plain <code>readonly field?: T</code>, and it means strictly "present or
+absent": explicitly passing <code>undefined</code> is a type error. (Upstream
+Effect v4 instead spells these <code>?: T | undefined</code> to permit
+explicit undefined; we deliberately take the stricter line.) Conditional
+option assembly therefore uses conditional spreads
+(<code>...(Predicate.isNotUndefined(x) ? { timeout: x } : {})</code>), and
+<code>undefined</code> never appears in the public surface — nor do
+<code>null</code> or nullish unions, anywhere.</p>
+
+<p>Alongside <code>layer(options)</code> for explicit values,
+<code>layerConfig</code> takes <code>Config</code> values and defers to the
+same <code>make</code> — the two-tier convention every Effect provider package
+follows:</p>
+
+<pre>
+const NatsLive = NatsClient.layerConfig({
+  servers: Config.String("NATS_SERVERS").pipe(Config.map((s) =&gt; s.split(","))),
+  auth: Config.Redacted("NATS_TOKEN").pipe(Config.map((token) =&gt; NatsClient.authToken({ token })))
+}).pipe(Layer.provide(NodeConnector.layer))
+</pre>
+
+<p><strong>Trade-off</strong>: our <code>Options</code> deliberately omits
+low-level fields (<code>pedantic</code>, <code>verbose</code>,
+<code>noAsyncTraces</code>, <code>reconnectDelayHandler</code>, …). Anything
+omitted remains reachable through <code>transformOptions</code>. The price is
+that the escape hatch takes raw milliseconds and raw strings — SDK types,
+undecorated. That is intentional: the hatch should feel like a hatch.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="errors">
+<h2>6. Errors as values</h2>
+
+<p>The SDK defines its core error classes in <code>core/src/errors.ts</code>
+and signals failure by throwing or rejecting. Callers discriminate with
+<code>instanceof</code> — invisible to the type system, so nothing tells you
+that <code>request()</code> can fail with <code>NoRespondersError</code> until
+production does. Effect's error channel exists precisely to make that set
+visible and exhaustive.</p>
+
+<p>Effect v4's idiom for framework-grade errors is
+<code>Schema.TaggedErrorClass</code> (see <code>SocketError</code> and friends
+in <code>unstable/socket/Socket.ts</code>): tagged for
+<code>catchTag</code>, schema-backed so errors serialize across process
+boundaries, with opaque causes carried as <code>Schema.Defect</code>:</p>
+
+<pre>
+export class NoRespondersError extends Schema.TaggedErrorClass&lt;NoRespondersError&gt;(
+  "effect-nats/NatsError/NoRespondersError"
+)("NoRespondersError", {
+  subject: Schema.String
+}) {}
+</pre>
+
+<p>We mirror the SDK taxonomy one-to-one — a mapping function at the boundary
+turns each <code>instanceof</code> into the corresponding tagged class, and
+anything unrecognized becomes a defect (a bug in our mapping, not a domain
+failure the caller should handle):</p>
+
+<div class="table-scroll">
+<table>
+<tr><th>Tagged error</th><th>Carries</th><th>Raised by</th></tr>
+<tr><td><code>ConnectionError</code></td><td><code>cause</code></td><td>connect, reconnect exhaustion</td></tr>
+<tr><td><code>TimeoutError</code></td><td>—</td><td>connect, request, flush, rtt</td></tr>
+<tr><td><code>ClosedConnectionError</code></td><td>—</td><td>any op after close</td></tr>
+<tr><td><code>DrainingConnectionError</code></td><td>—</td><td>any op while draining</td></tr>
+<tr><td><code>NoRespondersError</code></td><td><code>subject</code></td><td>request / requestMany</td></tr>
+<tr><td><code>RequestError</code></td><td><code>subject</code>, <code>cause</code></td><td>request plumbing failures</td></tr>
+<tr><td><code>AuthorizationError</code></td><td>—</td><td>connect, server auth revocation</td></tr>
+<tr><td><code>PermissionViolationError</code></td><td><code>operation</code>, <code>subject</code>, <code>queue: Option</code></td><td>pub/sub against server ACLs</td></tr>
+<tr><td><code>ProtocolError</code></td><td><code>cause</code></td><td>wire-level violations</td></tr>
+<tr><td><code>InvalidSubjectError</code></td><td><code>subject</code></td><td>publish/subscribe/request</td></tr>
+<tr><td><code>UserAuthenticationExpiredError</code></td><td>—</td><td>server-side credential expiry; typically surfaces via <code>closed</code> / status</td></tr>
+<tr><td><code>NoReplySubjectError</code></td><td><code>subject</code></td><td><code>NatsMessage.respond</code> on a message without a reply inbox (ours, not the SDK's)</td></tr>
+</table>
+</div>
+
+<p>Two SDK classes are deliberately <em>not</em> mirrored:
+<code>InvalidOperationError</code> (e.g. iterating a callback-mode
+subscription) and <code>InvalidArgumentError</code> (malformed options). Both
+indicate a bug in the calling code or in this wrapper, not a condition a
+caller should branch on, so they surface as defects. Our typed
+<code>Options</code> makes most <code>InvalidArgumentError</code> cases
+unrepresentable in the first place; the residual path is
+<code>transformOptions</code>, which is a hatch and priced as one.</p>
+
+<p>One implementation note that must survive into code review: the boundary
+mapper matches on <code>instanceof</code>, never on <code>.name</code> — the
+SDK's <code>NoRespondersError</code> sets <code>this.name = "NoResponders"</code>,
+not <code>"NoRespondersError"</code>. JetStream contributes its own error
+hierarchy, mapped the same way in its own module (§11.5).</p>
+
+<pre>
+export type NatsError =
+  | ConnectionError | TimeoutError | ClosedConnectionError | DrainingConnectionError
+  | NoRespondersError | RequestError | AuthorizationError | PermissionViolationError
+  | ProtocolError | InvalidSubjectError | UserAuthenticationExpiredError | NoReplySubjectError
+
+export const isNatsError: (u: unknown) =&gt; u is NatsError
+</pre>
+
+<p><strong>Design choice, priced</strong>: the socket module takes the other
+road — one root <code>SocketError</code> wrapping a <code>reason</code> union.
+That keeps method signatures short at the cost of two-level pattern matching
+(<code>catchTag("SocketError")</code>, then match on reason). We choose the
+<em>flat union</em> and give each operation its <em>narrowest</em> error type
+(<code>request</code> fails with
+<code>TimeoutError | NoRespondersError | RequestError | ClosedConnectionError | DrainingConnectionError | InvalidSubjectError</code>;
+<code>publish</code> can never fail with <code>NoRespondersError</code>).
+Flat unions make <code>Effect.catchTag("NoRespondersError", …)</code> a
+one-liner, which is the single most common thing users do with NATS errors.
+The price is longer signatures and the risk that adding a new failure mode to
+an operation is a breaking change to its type — a price we accept because
+that break is exactly the information the caller needs.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="messages">
+<h2>7. Messages and headers</h2>
+
+<p>The SDK's <code>Msg</code> has three habits that don't survive contact with
+Effect code: <code>reply</code> is <code>string | undefined</code> (every
+consumer writes the same <code>if</code>), <code>json()</code> throws on
+malformed payloads, and <code>headers</code> is an optional, mutable,
+throwing-getter <code>MsgHdrs</code>. None of these needs new machinery —
+Effect has <code>Option</code>, <code>Schema</code>, and immutable-view
+patterns for exactly these shapes.</p>
+
+<pre>
+export interface NatsMessage {
+  readonly [TypeId]: typeof TypeId
+  readonly subject: string
+  readonly payload: Uint8Array
+  readonly replyTo: Option.Option&lt;string&gt;
+  readonly headers: NatsHeaders.NatsHeaders          <span class="c">// empty view when absent</span>
+}
+
+<span class="c">// module functions (dual where a data-last pipe form is useful):</span>
+export const text: (self: NatsMessage) =&gt; string
+export const schemaJson: &lt;S extends Schema.Top&gt;(schema: S) =&gt;
+  (self: NatsMessage) =&gt; Effect.Effect&lt;S["Type"], Schema.SchemaError&gt;
+export const respond: {
+  (options?: RespondOptions): (self: NatsMessage) =&gt; Effect.Effect&lt;void, NoReplySubjectError | ClosedConnectionError&gt;
+  (self: NatsMessage, options?: RespondOptions): Effect.Effect&lt;void, NoReplySubjectError | ClosedConnectionError&gt;
+}
+</pre>
+
+<p><code>schemaJson</code> is composition, not code:
+<code>Schema.fromJsonString(schema)</code> already exists in v4, so decoding a
+JSON payload is "decode bytes to string, then run the transformed schema" —
+and the error is a real <code>SchemaError</code> carrying the path to the
+offending field, not a bare <code>SyntaxError</code>. The wrapper object is a
+lazy view over the SDK <code>Msg</code> (which it retains privately so
+<code>respond</code> can delegate); we allocate one small object per message
+and defer header/reply materialization until asked. That per-message
+allocation is the cost of immutability here, and at NATS message rates it is
+measurable — if profiling ever shows it, the escape hatch
+(<code>subscribeRaw</code>, §8) exists. The same wrapper strategy — and the
+same <code>schemaJson</code>/<code>text</code> helpers, shared internally —
+reappears for JetStream's <code>JsMsg</code> (§11.4) and KV's
+<code>KvEntry</code> (§12), so payload decoding is one idea across the whole
+library.</p>
+
+<p><code>NatsHeaders</code> is the same story in miniature: an immutable view
+over <code>MsgHdrs</code> with <code>get</code> returning
+<code>Option&lt;string&gt;</code>, <code>getAll</code> returning
+<code>ReadonlyArray&lt;string&gt;</code>, and a <code>fromInput</code>
+constructor accepting a plain record for the publish path. We do not adopt
+<code>effect/unstable/http</code>'s <code>Headers</code> module: NATS headers
+are case-sensitive by default with canonical-MIME matching as an opt-in
+(<code>Match</code> in the SDK), and HTTP semantics would quietly corrupt
+that.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="subscriptions">
+<h2>8. Subscriptions are streams</h2>
+
+<p>A subscription is a flow of messages that begins when interest is declared
+and must end with an explicit <code>unsubscribe()</code> or
+<code>drain()</code> — cleanup attached to a flow of values. In Effect that is
+the definition of a scoped <code>Stream</code>, so the translation is almost
+embarrassingly direct: the SDK's <code>Subscription</code> already implements
+<code>AsyncIterable&lt;Msg&gt;</code>, and v4 ships
+<code>Stream.fromAsyncIterable(iterable, onError)</code>.</p>
+
+<pre>
+readonly subscribe: (subject: string, options?: SubscribeOptions) =&gt;
+  Stream.Stream&lt;NatsMessage.NatsMessage, NatsError&gt;
+
+export type SubscribeOptions = {
+  readonly queue?: string      <span class="c">// queue-group load balancing (§2)</span>
+  readonly max?: number        <span class="c">// auto-unsubscribe after n messages</span>
+}
+</pre>
+
+<p>Construction: <code>Effect.acquireRelease</code> creates the SDK
+subscription and registers <code>drain()</code> (bounded, falling back to
+<code>unsubscribe()</code>) as the finalizer; the acquired subscription is
+unwrapped into the stream via <code>Stream.fromAsyncIterable</code>, mapping
+each <code>Msg</code> to a <code>NatsMessage</code> and each iterator error
+through the §6 boundary mapper. When a consumer interrupts the stream — a
+<code>Stream.take(5)</code>, a failed downstream stage, fiber interruption —
+the scope closes and the server-side interest is removed. Forgetting to
+unsubscribe stops being a possible bug.</p>
+
+<pre>
+  Effect scope                         SDK                         server
+  ────────────                         ───                         ──────
+  stream started ───────────────────▶  nc.subscribe("orders.&gt;")──▶ +interest
+       │                                    │
+       │  pull ◀── for-await ◀── QueuedIterator ◀── socket bytes
+       │  pull ◀── ...                      │
+       ▼                                    ▼
+  scope closes ────────────────────▶  sub.drain() ───────────────▶ -interest
+  (take(n) done / error / interrupt)  (in-flight msgs processed first)
+</pre>
+
+<p><strong>Backpressure, honestly</strong>: for core subscriptions there is
+none end-to-end, and we must not imply otherwise. The NATS server pushes; the
+SDK's <code>QueuedIterator</code> buffers <em>unboundedly</em> in process
+memory when your consumer is slower than the publisher. Our stream pulls from
+that buffer, so Effect-side operators (<code>Stream.buffer</code>,
+<code>throttle</code>, <code>mapEffect</code> with bounded concurrency)
+control everything downstream of the buffer but nothing upstream of it. The
+SDK's own pressure valve is detection, not prevention: pass the experimental
+<code>slow</code> threshold and watch for <code>slowConsumer</code> status
+events (§10). The real answers are queue groups for load distribution and —
+now in scope — JetStream pull consumers (§11.3), whose batch-request protocol
+is genuine, server-honored flow control.</p>
+
+<p>Two deliberate omissions. The SDK's callback-mode subscription
+(<code>SubscriptionOptions.callback</code>) exists to skip the iterator's
+microtask overhead; we do not expose it in v1 because
+<code>Stream.callback</code> + <code>Queue.offerUnsafe</code> gives us the
+same fast path <em>if benchmarks demand it later</em> without changing the
+public type — the constructor swap is invisible behind
+<code>Stream</code>. And <code>subscribeRaw</code> (same stream, but of raw
+SDK <code>Msg</code>) is reserved as the documented performance hatch,
+consistent with §4.3.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="request">
+<h2>9. Request/reply</h2>
+
+<p>A request is a one-shot effect with a deadline and a known failure
+vocabulary — the shape <code>Effect</code> models natively:</p>
+
+<pre>
+readonly request: (subject: string, options?: RequestOptions) =&gt;
+  Effect.Effect&lt;
+    NatsMessage.NatsMessage,
+    TimeoutError | NoRespondersError | RequestError | InvalidSubjectError
+      | ClosedConnectionError | DrainingConnectionError
+  &gt;
+
+export type RequestOptions = {
+  readonly payload?: Payload                 <span class="c">// Uint8Array | string</span>
+  readonly headers?: NatsHeaders.Input
+  readonly timeout?: Duration.Input          <span class="c">// @default "1 second" (SDK default)</span>
+}
+</pre>
+
+<p><code>NoRespondersError</code> deserves its place in the signature: it is
+the difference between "the service is down" (immediate, actionable, retry
+elsewhere) and "the service is slow" (<code>TimeoutError</code>), and the
+server tells us which within one round-trip. Typed errors make the
+distinction impossible to ignore; with the raw SDK both arrive as rejected
+promises and are routinely conflated.</p>
+
+<p>One SDK limitation passes through: nats.js's <code>request()</code> takes
+no abort signal, so when an Effect fiber is interrupted mid-request we
+abandon the promise rather than cancel the server-side interest. The muxed
+inbox subscription makes this cheap (one pending entry times out internally),
+but "interrupt = abandon, not cancel" is the semantic and the JSDoc will say
+so.</p>
+
+<p><code>requestMany</code> — scatter/gather over a subject with multiple
+responders — is a bounded flow, i.e. a <code>Stream</code>. The SDK's
+termination strategies map onto one options object; <code>maxWait</code> is
+the only required bound:</p>
+
+<pre>
+readonly requestMany: (subject: string, options: RequestManyOptions) =&gt;
+  Stream.Stream&lt;NatsMessage.NatsMessage, NatsError&gt;
+
+export type RequestManyOptions = {
+  readonly payload?: Payload
+  readonly headers?: NatsHeaders.Input
+  readonly maxWait: Duration.Input                       <span class="c">// hard deadline for the whole gather</span>
+  readonly maxMessages?: number              <span class="c">// stop after n replies ("count")</span>
+  readonly stall?: Duration.Input            <span class="c">// stop after a quiet gap ("stall")</span>
+  readonly sentinel?: boolean                <span class="c">// stop on an empty-payload end marker ("sentinel")</span>
+}
+</pre>
+
+<p>The SDK selects among four named strategies
+(<code>"timer" | "count" | "stall" | "sentinel"</code>,
+<code>core/src/request.ts</code>); we derive the strategy from which bound the
+caller supplies instead of asking them to name it, with <code>maxWait</code>
+always the hard ceiling.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="lifecycle">
+<h2>10. Connection lifecycle as observable data</h2>
+
+<p>Reconnection is the SDK's crown jewel and we do not touch it: server-pool
+gossip, exponential-ish delays with jitter, auth-failure abort — all inherited
+as-is, tuned through §5's <code>reconnect</code> options. What the SDK
+<em>reports</em> about that machinery is an
+<code>AsyncIterable&lt;Status&gt;</code> — an eleven-variant discriminated
+union (<code>disconnect</code>, <code>reconnecting</code>,
+<code>reconnect</code>, <code>update</code>, <code>ldm</code>,
+<code>ping</code>, <code>staleConnection</code>, <code>slowConsumer</code>,
+<code>forceReconnect</code>, <code>error</code>, <code>close</code>). We
+expose it as an infinite, never-failing stream and re-export the union as
+<code>ConnectionStatus</code>:</p>
+
+<pre>
+readonly status: Stream.Stream&lt;ConnectionStatus&gt;     <span class="c">// multiple consumers allowed;</span>
+                                                     <span class="c">// each subscribe() on the SDK side</span>
+readonly closed: Effect.Effect&lt;Option.Option&lt;NatsError&gt;&gt;  <span class="c">// resolves once, at close;</span>
+                                                            <span class="c">// Some(e) when close was caused by e</span>
+
+<span class="c">// typical use: structured logging of connection health</span>
+yield* nats.status.pipe(
+  Stream.runForEach((s) =&gt; Effect.logInfo("nats", s)),
+  Effect.forkScoped
+)
+</pre>
+
+<p>The SDK's <code>closed()</code> promise "resolves to an error instead of
+rejecting" — a promise-land contortion for "tell me how it ended without
+forcing a try/catch". <code>Effect.Effect&lt;Option.Option&lt;NatsError&gt;&gt;</code>
+says the same thing in the type: it always succeeds, and the payload tells you
+whether the ending was clean. One leak we accept for v1: the
+<code>slowConsumer</code> variant carries a raw SDK <code>Subscription</code>
+object, because remapping it to our stream handles would require bookkeeping
+disproportionate to its diagnostic value.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="jetstream">
+<h2>11. JetStream: the log, bolted back on</h2>
+
+<h3>11.1 Why it exists, and what the words mean</h3>
+
+<p>Core NATS forgets. A message that finds no subscriber at the instant it
+transits the server is gone, and a subscriber that crashes loses whatever was
+in flight. To promise "this order event will be processed at least once" you
+need two things the core protocol lacks: the server must <em>store</em>
+messages, and it must <em>track</em> which ones each reader has confirmed.
+JetStream is that layer, built by the NATS server on top of the same wire
+protocol. A <em>stream</em> is a named, stored, subject-filtered log — here
+the Kafka comparison finally inverts: this <em>is</em> the log, with
+retention limits, replicas, and sequence numbers. A <em>consumer</em> is a
+server-side cursor over a stream: it remembers a position, redelivers
+messages that were not acknowledged within <code>ack_wait</code>, and counts
+delivery attempts.</p>
+
+<p>The delivery mechanism worth understanding, because our whole streaming
+story hangs on it, is the <em>pull</em> protocol. The client sends the server
+a bounded request — "give me up to 100 messages or 1 MB, expiring in 30
+seconds" — and the server sends at most that much. The client acknowledges
+each message individually and asks again when it wants more. Contrast §8:
+core subscriptions are a firehose the client can only buffer; pull consumers
+are a faucet the client opens by measured amounts. This is genuine,
+server-honored backpressure, and it is the reason JetStream belongs in v1
+rather than a roadmap.</p>
+
+<h3>11.2 The services</h3>
+
+<p>The SDK splits data plane from admin plane — <code>jetstream(nc)</code>
+returns the publishing/consuming client, <code>jetstreamManager(nc)</code> the
+stream/consumer CRUD API — and we keep that split as two services in two
+modules, both layered on <code>NatsClient</code>:</p>
+
+<pre>
+export class JetStream extends Context.Service&lt;JetStream, Service&gt;()(
+  "effect-nats/JetStream"
+) {}
+export const layer: (options?: JetStreamOptions) =&gt;
+  Layer.Layer&lt;JetStream, never, NatsClient&gt;
+
+export class JetStreamManager extends Context.Service&lt;JetStreamManager, Service&gt;()(
+  "effect-nats/JetStreamManager"
+) {}
+export const layer: (options?: JetStreamOptions) =&gt;
+  Layer.Layer&lt;JetStreamManager, never, NatsClient&gt;
+
+export type JetStreamOptions = {
+  readonly apiPrefix?: string
+  readonly domain?: string
+  readonly timeout?: Duration.Input
+}
+</pre>
+
+<p>Publishing to a stream differs from core publish in one fundamental way:
+the server answers. The reply — which stream stored it, at what sequence,
+whether it was a duplicate — is a <code>PubAck</code>, and the options carry
+the deduplication and optimistic-concurrency machinery
+(<code>msgID</code>, <code>expect.lastSubjectSequence</code>, …) that KV is
+later built from:</p>
+
+<pre>
+readonly publish: (subject: string, options?: PublishOptions) =&gt;
+  Effect.Effect&lt;PubAck, JetStreamError | WrongLastSequenceError | TimeoutError | JetStreamNotEnabledError&gt;
+
+export type PublishOptions = {
+  readonly payload?: Payload
+  readonly headers?: NatsHeaders.Input
+  readonly msgID?: string                <span class="c">// server-side dedup within duplicate_window</span>
+  readonly timeout?: Duration.Input
+  readonly retries?: number              <span class="c">// on no-responders/timeout; SDK default 1</span>
+  readonly expect?: {                                <span class="c">// optimistic concurrency, all optional:</span>
+    readonly streamName?: string
+    readonly lastMsgID?: string
+    readonly lastSequence?: number
+    readonly lastSubjectSequence?: number
+  }
+}
+
+export type PubAck = {
+  readonly stream: string
+  readonly seq: number
+  readonly duplicate: boolean
+}
+</pre>
+
+<h3>11.3 Consuming: three verbs, three shapes</h3>
+
+<p>The SDK gives a consumer three ways to receive, and each maps onto a
+different Effect shape because each has different termination semantics
+(verified in <code>jetstream/src/consumer.ts</code>):</p>
+
+<div class="table-scroll">
+<table>
+<tr><th>SDK verb</th><th>Semantics</th><th>Effect shape</th></tr>
+<tr><td><code>next()</code></td><td>one message or null after <code>expires</code></td><td><code>Effect&lt;Option&lt;JsMessage&gt;, …&gt;</code></td></tr>
+<tr><td><code>fetch(opts)</code></td><td>one bounded pull; iterator self-terminates when the batch/byte/time budget is spent; missed heartbeats end it with an error</td><td>bounded <code>Stream&lt;JsMessage, JetStreamError&gt;</code></td></tr>
+<tr><td><code>consume(opts)</code></td><td>endless: SDK re-issues pull requests whenever the buffered count falls to 75% of <code>max_messages</code>; never self-terminates; self-heals through heartbeat loss</td><td>infinite <code>Stream&lt;JsMessage, JetStreamError&gt;</code>, ended only by scope close or fatal protocol error</td></tr>
+</table>
+</div>
+
+<pre>
+readonly consumer: (stream: string, name?: string | OrderedConsumerOptions) =&gt;
+  Effect.Effect&lt;JsConsumer, StreamNotFoundError | ConsumerNotFoundError | JetStreamApiError&gt;
+
+export interface JsConsumer {
+  readonly next: (options?: NextOptions) =&gt;
+    Effect.Effect&lt;Option.Option&lt;JsMessage.JsMessage&gt;, JetStreamError&gt;
+  readonly fetch: (options?: FetchOptions) =&gt;
+    Stream.Stream&lt;JsMessage.JsMessage, JetStreamError&gt;
+  readonly consume: (options?: ConsumeOptions) =&gt;
+    Stream.Stream&lt;JsMessage.JsMessage, JetStreamError&gt;
+  readonly info: (cached?: boolean) =&gt; Effect.Effect&lt;ConsumerInfo, JetStreamApiError&gt;
+}
+
+export type ConsumeOptions = {
+  readonly maxMessages?: number            <span class="c">// buffered pull size, SDK default 100</span>
+  readonly maxBytes?: number
+  readonly thresholdMessages?: number      <span class="c">// re-pull trigger, default 75%</span>
+  readonly abortOnMissingResource?: boolean
+  readonly bind?: boolean
+  <span class="c">// side-channel for the SDK's 15-variant ConsumerNotification union —</span>
+  <span class="c">// heartbeats_missed, ordered_consumer_recreated, consumer_deleted, …</span>
+  readonly onNotification?: ((n: ConsumerNotification) =&gt; Effect.Effect&lt;unknown&gt;)
+}
+</pre>
+
+<p>Omitting the consumer <code>name</code> requests an <em>ordered
+consumer</em> — an ephemeral, auto-recreated cursor that guarantees in-order
+delivery by tearing itself down and resuming from the last known sequence
+whenever it detects a gap. The SDK handles the recreation invisibly (emitting
+<code>ordered_consumer_recreated</code> notifications); our stream simply
+keeps flowing, which is exactly the semantics a stream consumer wants.</p>
+
+<p>Notifications deserve their design note. A <code>consume()</code> session
+carries a second async iterable, <code>status()</code>, with fifteen
+informational variants. They are diagnostics, not data — mixing them into the
+message stream would force every consumer to filter them back out, and giving
+them a separate first-class stream would double the surface for something
+most callers ignore. The <code>onNotification</code> handler — run in a
+forked, scope-bound fiber — is the proportionate design: invisible when
+unused, fully typed when needed. The one variant that is <em>not</em> merely
+informational is priced by the SDK itself: on <code>fetch()</code> (bounded,
+non-ordered), two missed heartbeats terminate the iterator with an error, and
+our stream fails with a typed <code>JetStreamError</code>; on
+<code>consume()</code> the SDK recovers by re-syncing, and we stay silent
+apart from the notification.</p>
+
+<p><strong>Scope-tied shutdown</strong>: the stream's finalizer calls
+<code>ConsumerMessages.close()</code>, which stops pulling and resolves after
+in-flight messages are handed over. Combined with <code>ack_wait</code>
+redelivery, interruption is safe by construction: anything your fiber did not
+ack before dying comes back to the next consumer instance. That property —
+interruption-safety for free — is the single biggest win of the whole
+JetStream wrapper.</p>
+
+<h3>11.4 The message and its acknowledgments</h3>
+
+<p>A JetStream message is a core message plus a delivery context (stream
+sequence, delivery count, pending count) and an acknowledgment vocabulary.
+The wrapper shape follows §7, with acks as effects:</p>
+
+<pre>
+export interface JsMessage extends NatsMessage.NatsMessage {
+  readonly stream: string
+  readonly consumer: string
+  readonly seq: number                        <span class="c">// stream sequence</span>
+  readonly deliveryCount: number
+  readonly redelivered: boolean               <span class="c">// deliveryCount &gt; 1</span>
+  readonly pending: number                    <span class="c">// msgs the server still holds for this consumer</span>
+  readonly time: DateTime.Utc                 <span class="c">// effect/DateTime, not a JS Date</span>
+}
+
+export const ack:     (self: JsMessage) =&gt; Effect.Effect&lt;void&gt;
+export const nak:     (self: JsMessage, options?: { readonly delay?: Duration.Input }) =&gt; Effect.Effect&lt;void&gt;
+export const working: (self: JsMessage) =&gt; Effect.Effect&lt;void&gt;      <span class="c">// extend ack_wait</span>
+export const term:    (self: JsMessage, options?: { readonly reason?: string }) =&gt; Effect.Effect&lt;void&gt;
+export const ackAck:  (self: JsMessage) =&gt; Effect.Effect&lt;boolean, TimeoutError&gt;  <span class="c">// round-trip confirmed</span>
+<span class="c">// text / schemaJson inherited conceptually from NatsMessage (§7)</span>
+</pre>
+
+<p>The four verbs are the consumer's contract with the server: <em>ack</em>
+("done, advance the cursor"), <em>nak</em> ("failed, redeliver — optionally
+after a delay"), <em>working</em> ("still processing, reset my
+<code>ack_wait</code> clock"), <em>term</em> ("never redeliver this one").
+Only <code>ackAck</code> costs a round-trip; the rest are fire-and-forget
+publishes, which is why they cannot fail with anything but a closed
+connection (a defect at that point, since the enclosing stream has already
+failed). A convenience combinator earns its keep here:</p>
+
+<pre>
+<span class="c">// process-and-ack: ack on success, nak on failure, term on defect — the</span>
+<span class="c">// 90% loop written once. Handler + one options object, per convention</span>
+<span class="c">// (Stream.mapEffect(f, { concurrency }) is the shape, not currying):</span>
+export const processWith: &lt;A, E, R&gt;(
+  handler: (msg: JsMessage) =&gt; Effect.Effect&lt;A, E, R&gt;,
+  options?: { readonly nakDelay?: Duration.Input }
+) =&gt; (msg: JsMessage) =&gt; Effect.Effect&lt;void, never, R&gt;
+</pre>
+
+<h3>11.5 The manager, listers, and JetStream errors</h3>
+
+<p><code>JetStreamManager</code> wraps the admin plane: <code>streams</code>
+(add, update, info, delete, purge, getMessage) and <code>consumers</code>
+(add, update, info, delete, pause, resume). Two design decisions:</p>
+
+<p><em>Config passthrough.</em> <code>StreamConfig</code> and
+<code>ConsumerConfig</code> are ~40 snake_case fields each, mirroring server
+JSON (retention/storage/ack_policy enums, <code>Nanos</code> durations). We
+pass these through as re-exported SDK types rather than re-modeling them —
+re-typing 80 fields buys churn, not safety, since the server is the
+validator. The exception: fields that are durations in <em>milliseconds or
+nanoseconds</em> get accepted as <code>Duration.Input</code> at our
+constructors and converted (<code>Duration.toMillis</code> /
+<code>nanos()</code>), because raw <code>Nanos</code> numbers are the single
+most error-prone part of the upstream API.</p>
+
+<p><em>Listers are streams.</em> The SDK's <code>Lister&lt;T&gt;</code>
+paginates (<code>next(): Promise&lt;T[]&gt;</code> per page, async-iterable
+per item). <code>Stream.paginate</code> exists for precisely this shape, so
+<code>streams.list()</code> and <code>consumers.list(stream)</code> return
+<code>Stream&lt;StreamInfo&gt;</code> / <code>Stream&lt;ConsumerInfo&gt;</code>
+and pagination disappears from the caller's view.</p>
+
+<p>JetStream errors live in their own module, mapped like §6:
+<code>JetStreamNotEnabledError</code>, <code>JetStreamError</code>,
+<code>JetStreamStatusError</code> (<code>code</code>),
+<code>JetStreamApiError</code> (<code>code</code> = NATS err_code,
+<code>status</code> = HTTP-ish), <code>StreamNotFoundError</code> (10059),
+<code>ConsumerNotFoundError</code> (10014), <code>InvalidNameError</code>, and
+— pulled out by err_code 10071/10164 because callers branch on it —
+<code>WrongLastSequenceError</code>, the optimistic-concurrency conflict that
+powers KV's compare-and-set.</p>
+
+<div class="verdict">
+<span class="label">Deliberately deferred within JetStream</span>
+<p>Push consumers (legacy delivery model; pull is the modern path and the only
+one new servers optimize), <code>startBatch</code>/<code>FastIngest</code>
+(atomic batching, server 2.12+/2.14+, API still moving),
+<code>DirectStreamAPI</code>, scheduled publishes
+(<code>schedule</code>/<code>cancelSchedule</code>), and
+<code>advisories()</code>. All remain reachable via the raw-client escape
+hatch (<code>JetStream.client</code> exposes the SDK
+<code>JetStreamClient</code>), and none blocks a later additive module.</p>
+</div>
+</section>
+
+<!-- ================================================================ -->
+<section id="kv">
+<h2>12. KV: a bucket is a stream wearing a hash-map costume</h2>
+
+<p>Once a server can store a log and answer "what is the last message on
+subject X", a key-value store falls out almost for free. A <em>bucket</em>
+named <code>orders</code> is a JetStream stream named <code>KV_orders</code>
+holding one subject per key; <em>put</em> publishes to the key's subject;
+<em>get</em> reads the subject's latest message; the <em>revision</em> is the
+stream sequence number; compare-and-set is the
+<code>expect.lastSubjectSequence</code> header from §11.2; a <em>delete</em>
+is a tombstone message with operation <code>DEL</code>. History and watch are
+the stream's own replay and tail. That is the entire mechanism — KV is a
+projection of JetStream, and the SDK's <code>Kvm</code> class is honest about
+it (it takes a JetStream client in its constructor). Ours does the same.</p>
+
+<pre>
+<span class="c">// NatsKv.ts — a bucket handle is a resource, not a singleton:</span>
+export const open:   (bucket: string) =&gt; Effect.Effect&lt;Kv, BucketNotFoundError | JetStreamApiError, JetStream&gt;
+export const create: (bucket: string, options?: BucketOptions) =&gt; Effect.Effect&lt;Kv, JetStreamApiError, JetStream&gt;
+<span class="c">// and for the common one-bucket app, a service + layer over the handle:</span>
+export class NatsKv extends Context.Service&lt;NatsKv, Kv&gt;()("effect-nats/NatsKv") {}
+export const layer: (bucket: string, options?: BucketOptions) =&gt;
+  Layer.Layer&lt;NatsKv, JetStreamApiError, JetStream&gt;
+
+export interface Kv {
+  readonly get: (key: string, options?: { readonly revision?: number }) =&gt;
+    Effect.Effect&lt;Option.Option&lt;KvEntry&gt;, JetStreamError&gt;
+  readonly put: (key: string, value: Payload) =&gt;
+    Effect.Effect&lt;number, JetStreamError&gt;                          <span class="c">// new revision</span>
+  readonly create: (key: string, value: Payload) =&gt;
+    Effect.Effect&lt;number, KeyExistsError | JetStreamError&gt;         <span class="c">// fails if key live</span>
+  readonly update: (key: string, value: Payload, options: { readonly revision: number }) =&gt;
+    Effect.Effect&lt;number, WrongLastSequenceError | JetStreamError&gt; <span class="c">// CAS</span>
+  readonly delete: (key: string) =&gt; Effect.Effect&lt;void, JetStreamError&gt;   <span class="c">// tombstone, history kept</span>
+  readonly purge:  (key: string) =&gt; Effect.Effect&lt;void, JetStreamError&gt;   <span class="c">// history erased</span>
+  readonly keys:    (filter?: string) =&gt; Stream.Stream&lt;string, JetStreamError&gt;        <span class="c">// bounded</span>
+  readonly history: (options?: { readonly key?: string }) =&gt;
+    Stream.Stream&lt;KvEntry, JetStreamError&gt;                                            <span class="c">// bounded</span>
+  readonly watch:   (options?: WatchOptions) =&gt; Stream.Stream&lt;KvEntry, JetStreamError&gt; <span class="c">// infinite</span>
+  readonly status:  Effect.Effect&lt;KvStatus, JetStreamError&gt;
+}
+
+export interface KvEntry {
+  readonly key: string
+  readonly value: Uint8Array
+  readonly revision: number
+  readonly operation: "PUT" | "DEL" | "PURGE"
+  readonly created: DateTime.Utc
+  readonly isUpdate: boolean     <span class="c">// false during watch catch-up, true once live</span>
+}
+</pre>
+
+<p><code>update</code>'s error type is where the derivation pays off: the SDK
+surfaces a CAS conflict as a JetStream 409 with err_code 10071, which §11.5
+already reified as <code>WrongLastSequenceError</code> — so
+<code>Effect.retry</code> with a fresh <code>get</code> is a typed,
+five-line optimistic-concurrency loop. <code>create</code> on a live key is
+the same server rejection; we re-tag it <code>KeyExistsError</code> because
+"already exists" is what the caller means to catch. Termination semantics
+follow the SDK exactly: <code>watch()</code> never ends on its own (scope
+close stops it); <code>keys()</code> and <code>history()</code> end when the
+catch-up is delivered.</p>
+
+<p><strong>The compatibility dividend</strong>: Effect v4 ships a standard
+store interface, <code>effect/unstable/persistence/KeyValueStore</code>
+(string/Uint8Array get/set/remove, plus schema stores). A NATS bucket
+satisfies it trivially, so we also ship:</p>
+
+<pre>
+export const layerKeyValueStore: (bucket: string, options?: BucketOptions) =&gt;
+  Layer.Layer&lt;KeyValueStore.KeyValueStore, JetStreamApiError, JetStream&gt;
+</pre>
+
+<p>Any Effect code written against the standard interface — persisted caches,
+schema stores — runs on NATS KV unchanged. The mapping discards revisions and
+watch (the standard interface has neither); code that needs those uses
+<code>Kv</code> directly. Cheap to build, disproportionately useful.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="objectstore">
+<h2>13. ObjectStore: large values, chunked</h2>
+
+<p>KV values ride in single messages, and messages have a size ceiling
+(server default 1 MB). To store a 200 MB artifact you split it into chunks,
+store each chunk as a message, and keep a manifest — name, size, chunk count,
+SHA-256 digest — as a separate metadata entry. That is ObjectStore: another
+JetStream projection, with the manifest called <code>ObjectInfo</code>. The
+SDK exposes the chunked I/O as web-standard
+<code>ReadableStream&lt;Uint8Array&gt;</code>, and Effect v4 has the adapters
+(<code>Stream.fromReadableStream</code>,
+<code>Stream.toReadableStreamWith</code>), so the wrapper is again
+composition:</p>
+
+<pre>
+export const open:   (bucket: string) =&gt; Effect.Effect&lt;ObjectStore, BucketNotFoundError | JetStreamApiError, JetStream&gt;
+export const create: (bucket: string, options?: BucketOptions) =&gt; Effect.Effect&lt;ObjectStore, JetStreamApiError, JetStream&gt;
+export class NatsObjectStore extends Context.Service&lt;NatsObjectStore, ObjectStore&gt;()(
+  "effect-nats/NatsObjectStore"
+) {}
+export const layer: (bucket: string, options?: BucketOptions) =&gt; Layer.Layer&lt;...&gt;
+
+export interface ObjectStore {
+  readonly put: (meta: ObjectMeta, data: Stream.Stream&lt;Uint8Array, unknown&gt;) =&gt;
+    Effect.Effect&lt;ObjectInfo, ObjectStoreError&gt;
+  readonly get: (name: string) =&gt;
+    Effect.Effect&lt;Option.Option&lt;ObjectEntry&gt;, ObjectStoreError&gt;
+  readonly putBlob: (meta: ObjectMeta, data: Uint8Array) =&gt; Effect.Effect&lt;ObjectInfo, ObjectStoreError&gt;
+  readonly getBlob: (name: string) =&gt; Effect.Effect&lt;Option.Option&lt;Uint8Array&gt;, ObjectStoreError&gt;
+  readonly info:   (name: string) =&gt; Effect.Effect&lt;Option.Option&lt;ObjectInfo&gt;, ObjectStoreError&gt;
+  readonly list:   Effect.Effect&lt;ReadonlyArray&lt;ObjectInfo&gt;, ObjectStoreError&gt;
+  readonly delete: (name: string) =&gt; Effect.Effect&lt;void, ObjectStoreError&gt;
+  readonly watch:  (options?: { readonly includeHistory?: boolean }) =&gt;
+    Stream.Stream&lt;ObjectInfo, ObjectStoreError&gt;
+  readonly seal:   Effect.Effect&lt;void, ObjectStoreError&gt;
+  readonly status: Effect.Effect&lt;ObjectStoreStatus, ObjectStoreError&gt;
+}
+
+export interface ObjectEntry {
+  readonly info: ObjectInfo
+  readonly data: Stream.Stream&lt;Uint8Array, ObjectStoreError&gt;   <span class="c">// digest-verified; fails, never truncates silently</span>
+}
+</pre>
+
+<p>The one genuinely subtle upstream shape is <code>get()</code>'s result: the
+SDK returns <code>{ info, data: ReadableStream, error: Promise&lt;Error | null&gt; }</code>
+— the error promise resolves <em>after</em> the stream ends, reporting digest
+mismatches or missing chunks that could not be known upfront. We fold that
+side-channel into the data stream itself: consume the bytes, then await the
+error promise, and fail the stream if it reports. An Effect stream that
+completed successfully therefore <em>means</em> the digest checked out — the
+type does what the SDK's documentation asks the caller to remember to do.
+Links (<code>link</code>/<code>linkStore</code>) are deferred; they're
+cross-bucket pointers with niche semantics, reachable via the escape
+hatch.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="micro">
+<h2>14. Services: request/reply, institutionalized</h2>
+
+<p>Any process can answer requests with §2's primitives: subscribe to a
+subject under a queue group, respond to each message. Do that at fleet scale
+and operational questions follow — what services exist? are they alive? how
+many requests has each endpoint handled, how slow, how many errors? The NATS
+<em>services framework</em> (a.k.a. micro) is a convention that answers these
+without new server features: a service registers its endpoints as ordinary
+queue-group subscriptions, and additionally listens on well-known control
+subjects (<code>$SRV.PING</code>, <code>$SRV.INFO</code>,
+<code>$SRV.STATS</code>, each scoped by name and instance id) where it
+answers discovery probes with standardized JSON. Errors travel back to
+callers in two reserved headers, <code>Nats-Service-Error</code> and
+<code>Nats-Service-Error-Code</code>. Like Kafka minus… no — like a service
+mesh's control plane, minus the mesh: discovery, health, and stats ride the
+same connection as the traffic.</p>
+
+<p>The SDK's builder is imperative (<code>svc.addEndpoint("echo",
+handler)</code> with callbacks or iterators, mutating a started service). An
+Effect service definition should instead be a <em>value</em> — declared once,
+run scoped, handlers as effects with dependencies in <code>R</code>. This is
+the same move <code>HttpApi</code> makes over raw route registration:</p>
+
+<pre>
+<span class="c">// NatsMicro.ts</span>
+export const make: &lt;R&gt;(options: ServiceOptions&lt;R&gt;) =&gt;
+  Effect.Effect&lt;RunningService, NatsError, NatsClient | Scope.Scope | R&gt;
+export const layer: &lt;R&gt;(options: ServiceOptions&lt;R&gt;) =&gt;
+  Layer.Layer&lt;never, NatsError, NatsClient | R&gt;      <span class="c">// runs for the layer's lifetime</span>
+
+export type ServiceOptions&lt;R&gt; = {
+  readonly name: string                                <span class="c">// e.g. "inventory"</span>
+  readonly version: string                             <span class="c">// semver, reported on $SRV.INFO</span>
+  readonly description?: string
+  readonly metadata?: Readonly&lt;Record&lt;string, string&gt;&gt;
+  readonly queue?: string                  <span class="c">// @default "q"</span>
+  readonly endpoints: Readonly&lt;Record&lt;string, Endpoint&lt;R&gt;&gt;&gt;
+}
+
+export type Endpoint&lt;R&gt; = {
+  readonly handler: (msg: NatsMessage.NatsMessage) =&gt;
+    Effect.Effect&lt;Payload | void, EndpointError, R&gt;
+  readonly subject?: string                <span class="c">// @default group-prefixed endpoint name</span>
+  readonly queue?: string
+  readonly metadata?: Readonly&lt;Record&lt;string, string&gt;&gt;
+  readonly concurrency?: number | "unbounded"   <span class="c">// @default 1 (serial, SDK-equivalent)</span>
+}
+
+export class EndpointError extends Schema.TaggedErrorClass&lt;EndpointError&gt;(
+  "effect-nats/NatsMicro/EndpointError"
+)("EndpointError", {
+  code: Schema.Int,          <span class="c">// → Nats-Service-Error-Code header</span>
+  description: Schema.String <span class="c">// → Nats-Service-Error header</span>
+}) {}
+</pre>
+
+<p>The runtime loop per endpoint: the wrapper takes the SDK's iterator mode
+(no callback), consumes it as a stream, and runs the handler per message with
+the configured concurrency. A returned <code>Payload</code> becomes
+<code>msg.respond(payload)</code>; a returned <code>void</code> means the
+handler responded manually (or chose not to); a failed
+<code>EndpointError</code> becomes <code>respondError(code,
+description)</code>; a defect becomes <code>respondError(500, "internal
+error")</code> plus a logged cause — the caller gets a well-formed error
+either way, and the service never crashes on a bad request. The
+<code>R</code> parameter is the quiet headline: handlers declare dependencies
+(a database service, a config), and they surface in the layer's requirements,
+type-checked end to end. Stats (<code>num_requests</code>,
+<code>num_errors</code>, <code>processing_time</code>) are maintained by the
+SDK and stay accurate because we respond through its <code>ServiceMsg</code>
+paths.</p>
+
+<p>The consumer side is <code>client</code>, wrapping the SDK's discovery
+scatter-gather (which is just §9's <code>requestMany</code> against the
+control subjects):</p>
+
+<pre>
+export const client: Effect.Effect&lt;MicroClient, never, NatsClient&gt;
+export interface MicroClient {
+  readonly ping:  (options?: DiscoverOptions) =&gt; Stream.Stream&lt;ServiceIdentity, NatsError&gt;
+  readonly info:  (options?: DiscoverOptions) =&gt; Stream.Stream&lt;ServiceInfo, NatsError&gt;
+  readonly stats: (options?: DiscoverOptions) =&gt; Stream.Stream&lt;ServiceStats, NatsError&gt;
+}
+</pre>
+
+<p><strong>Priced trade-off</strong>: declaring endpoints as a record forfeits
+the SDK's ability to add endpoints to a live service at runtime, and nested
+dynamic groups get flattened into explicit <code>subject</code> strings. Both
+are the cost of endpoints-as-values; a team that genuinely needs runtime
+mutation drops to the escape hatch (<code>RunningService.service</code>
+exposes the SDK object). We judge static definitions the right default for
+the same reason Effect judges layers the right default: topology you can read
+is topology you can test.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="surface">
+<h2>15. The public surface, in full</h2>
+
+<p>One package, <code>effect-nats</code> (repo package
+<code>packages/core</code>), depending on <code>effect</code> (peer) and
+<code>@nats-io/nats-core</code>, <code>@nats-io/transport-node</code>,
+<code>@nats-io/jetstream</code>, <code>@nats-io/kv</code>,
+<code>@nats-io/obj</code>, <code>@nats-io/services</code> (direct — mirroring
+the upstream package graph; subpath module isolation keeps unused ones out of
+bundles). Module layout follows the Effect convention exactly: one flat
+PascalCase file per module, a generated barrel <code>index.ts</code>
+(<code>export * as NatsClient from "./NatsClient.ts"</code>, …), a
+package-exports map with <code>"./*" → "./src/*.ts"</code> and internals
+blocked, and JSDoc on every export with <code>@since</code>,
+<code>@category</code>, and doctested <code>@example</code> blocks.</p>
+
+<pre>
+packages/core/src/
+├── index.ts              barrel (generated style; one export * as per module)
+│                         ── core ──
+├── NatsClient.ts         connection service, Options/Auth, make, layer, layerConfig
+├── NatsConnector.ts      connector service + layerWebSocket
+├── NodeConnector.ts      layer (TCP via @nats-io/transport-node; node + bun)
+├── NatsMessage.ts        immutable message view, schemaJson, respond, text
+├── NatsHeaders.ts        immutable headers, Input, fromInput, Option getters
+├── NatsError.ts          core tagged errors, NatsError union, isNatsError
+│                         ── jetstream ──
+├── JetStream.ts          client service: publish/PubAck, consumer(), JsConsumer
+├── JetStreamManager.ts   admin service: streams/consumers CRUD, listers as Streams
+├── JsMessage.ts          JsMessage view, ack/nak/working/term/ackAck, processWith
+├── JetStreamError.ts     JetStream tagged errors incl. WrongLastSequenceError
+│                         ── projections ──
+├── NatsKv.ts             Kv handle + service, open/create/layer, layerKeyValueStore
+├── NatsObjectStore.ts    ObjectStore handle + service, Stream&lt;Uint8Array&gt; I/O
+├── NatsMicro.ts          services framework: make/layer, EndpointError, client
+└── internal/             boundary mappers, QueuedIterator→Stream adapter — not exported
+</pre>
+
+<div class="table-scroll">
+<table>
+<tr><th>Export</th><th>Type (abbreviated)</th></tr>
+<tr><td><code>NatsClient</code> (class/tag)</td><td><code>Context.Service&lt;NatsClient, Service&gt;</code>, key <code>"effect-nats/NatsClient"</code></td></tr>
+<tr><td><code>NatsClient.make / layer / layerConfig</code></td><td><code>Layer&lt;NatsClient, …, NatsConnector&gt;</code> (§4–§5)</td></tr>
+<tr><td><code>Service.publish / subscribe / request / requestMany</code></td><td>§8–§9; <code>Stream</code>/<code>Effect</code> with narrowest error unions</td></tr>
+<tr><td><code>Service.flush / rtt / status / closed / connection</code></td><td>§10, §4.3</td></tr>
+<tr><td><code>NatsConnector.layerWebSocket</code>; <code>NodeConnector.layer</code></td><td>§4.2</td></tr>
+<tr><td><code>JetStream</code> + <code>layer(options?)</code></td><td><code>Layer&lt;JetStream, never, NatsClient&gt;</code> (§11.2)</td></tr>
+<tr><td><code>JetStream.Service.publish / consumer</code></td><td><code>Effect&lt;PubAck, …&gt;</code> / <code>Effect&lt;JsConsumer, …&gt;</code> (§11.2–11.3)</td></tr>
+<tr><td><code>JsConsumer.next / fetch / consume</code></td><td><code>Effect&lt;Option&lt;JsMessage&gt;&gt;</code> / bounded <code>Stream</code> / infinite <code>Stream</code> (§11.3)</td></tr>
+<tr><td><code>JsMessage.ack / nak / working / term / ackAck / processWith</code></td><td>§11.4</td></tr>
+<tr><td><code>JetStreamManager.Service.streams / consumers</code></td><td>CRUD effects; <code>list</code> as <code>Stream</code> (§11.5)</td></tr>
+<tr><td><code>NatsKv.open / create / layer / layerKeyValueStore</code></td><td>§12; <code>Kv</code> with <code>Option</code> gets, CAS via <code>WrongLastSequenceError</code></td></tr>
+<tr><td><code>NatsObjectStore.open / create / layer</code></td><td>§13; <code>Stream&lt;Uint8Array&gt;</code> I/O, digest folded into stream failure</td></tr>
+<tr><td><code>NatsMicro.make / layer / client / EndpointError</code></td><td>§14; endpoints-as-values, handlers with <code>R</code></td></tr>
+<tr><td><code>NatsMessage.* / NatsHeaders.* / NatsError.* / JetStreamError.*</code></td><td>§6–§7, §11.5</td></tr>
+</table>
+</div>
+
+<h3>What it reads like</h3>
+
+<pre>
+import { Config, Effect, Layer, Schema, Stream } from "effect"
+import { JetStream, JsMessage, NatsClient, NatsMicro, NodeConnector } from "effect-nats"
+
+const Order = Schema.Struct({ id: Schema.String, amountCents: Schema.Int })
+const decodeOrder = JsMessage.schemaJson(Order)   <span class="c">// hoisted: build the decoder once</span>
+
+const worker = Effect.gen(function*() {
+  const js = yield* JetStream
+
+  <span class="c">// durable, backpressured, interruption-safe consumption</span>
+  const consumer = yield* js.consumer("ORDERS", "billing-worker")
+  yield* consumer.consume({ maxMessages: 256 }).pipe(
+    Stream.mapEffect(
+      JsMessage.processWith(
+        (msg) =&gt; Effect.flatMap(decodeOrder(msg), chargeCard),
+        { nakDelay: "5 seconds" }
+      ),
+      { concurrency: 8 }
+    ),
+    Stream.runDrain
+  )
+})
+
+<span class="c">// a discoverable micro-service answering on "inventory.check"</span>
+const InventoryService = NatsMicro.layer({
+  name: "inventory",
+  version: "1.0.0",
+  endpoints: {
+    check: {
+      handler: (msg) =&gt;
+        Effect.map(checkStock(msg), (result) =&gt; JSON.stringify(result))
+    }
+  }
+})
+
+const MainLive = Layer.mergeAll(
+  InventoryService,
+  JetStream.layer()
+).pipe(
+  Layer.provide(NatsClient.layerConfig({ servers: Config.String("NATS_URL") })),
+  Layer.provide(NodeConnector.layer)
+)
+</pre>
+</section>
+
+<!-- ================================================================ -->
+<section id="nongoals">
+<h2>16. Non-goals</h2>
+
+<div class="verdict">
+<span class="label">Out of scope, and why</span>
+<p><strong>Deno</strong> — excluded per requirements; nothing in the layering
+blocks a future <code>DenoConnector</code> (upstream ships
+<code>@nats-io/transport-deno</code> with the identical factory shape).
+<strong>Push consumers, batch/FastIngest publishing, DirectStreamAPI,
+scheduled publishes, ObjectStore links</strong> — deferred within their
+sections (§11.5, §13) with the escape hatch as the interim path.
+<strong>Typed subject routing</strong> (schema-derived subject hierarchies à
+la RPC router) — tempting, genuinely novel, and premature until the plain
+surface is proven; <code>NatsMicro</code> is where it would grow.
+<strong>Auth callout / advanced nkey flows beyond the four <code>Auth</code>
+variants</strong> — reachable via <code>transformOptions</code> with a raw
+<code>authenticator</code>.</p>
+</div>
+</section>
+
+<!-- ================================================================ -->
+<section id="plan">
+<h2>17. Implementation plan</h2>
+
+<p>Twelve phases, each independently reviewable, each TDD-first with
+<code>@effect/vitest</code> (<code>it.effect</code>, <code>assert</code>).
+Phases 3+ run integration tests against a real <code>nats-server</code>
+(with <code>-js</code> for phases 6+) spawned per test file via a small
+scoped <code>TestNatsServer</code> layer — itself a dogfood of
+<code>acquireRelease</code>; the vendored repo's harness
+(<code>repos/nats.js/nst/</code>) documents the config knobs.</p>
+
+<div class="table-scroll">
+<table>
+<tr><th>#</th><th>Thread</th><th>Delivers</th><th>Verified by</th></tr>
+<tr><td>1</td><td>Scaffolding</td><td>package rename to <code>effect-nats</code>, all six <code>@nats-io/*</code> deps, exports map, barrel, lint/ast-grep clean</td><td><code>vp run check:all</code></td></tr>
+<tr><td>2</td><td>Pure core modules</td><td><code>NatsError</code> (classes + boundary mapper), <code>NatsHeaders</code>, <code>NatsMessage</code> (over a stub Msg)</td><td>unit tests, no server</td></tr>
+<tr><td>3</td><td>Connection</td><td><code>NatsConnector</code> + both layers, <code>NatsClient.make/layer/layerConfig</code>, scoped drain-on-release, connector semaphore</td><td>integration: connect/close/interrupt leaks nothing; both transports</td></tr>
+<tr><td>4</td><td>Publish + request</td><td><code>publish</code>, <code>flush</code>, <code>rtt</code>, <code>request</code> incl. <code>NoRespondersError</code> and timeout paths</td><td>integration: echo responder fixture</td></tr>
+<tr><td>5</td><td>Subscribe + status</td><td><code>subscribe</code> as scoped Stream (shared QueuedIterator→Stream adapter lands here); queue groups; <code>requestMany</code>; <code>status</code>/<code>closed</code></td><td>integration: interruption removes interest; kill/restart server, observe statuses</td></tr>
+<tr><td>6</td><td>JetStream publish</td><td><code>JetStream.layer</code>, <code>publish</code> with msgID/expect, <code>JetStreamError</code> module incl. <code>WrongLastSequenceError</code></td><td>integration: dedup, CAS conflict paths</td></tr>
+<tr><td>7</td><td>JsMessage + next/fetch</td><td><code>JsMessage</code> view, ack vocabulary as effects, <code>processWith</code>, <code>next</code>/<code>fetch</code></td><td>integration: redelivery after nak/no-ack; fetch termination + heartbeat error</td></tr>
+<tr><td>8</td><td>consume</td><td>infinite consume stream, ordered consumers, <code>onNotification</code>, scope-close ⇒ <code>close()</code></td><td>integration: interruption mid-batch redelivers; ordered recreate survives consumer delete</td></tr>
+<tr><td>9</td><td>JetStreamManager</td><td>streams/consumers CRUD, <code>Duration</code>-converted config fields, Listers as Streams</td><td>integration: CRUD round-trips, paged listing</td></tr>
+<tr><td>10</td><td>KV</td><td><code>NatsKv</code> handle + layer, CAS loop, watch/history/keys, <code>layerKeyValueStore</code></td><td>integration incl. running the effect KeyValueStore contract against a bucket</td></tr>
+<tr><td>11</td><td>ObjectStore</td><td>put/get with <code>Stream&lt;Uint8Array&gt;</code>, digest-failure folding, watch</td><td>integration: multi-chunk round-trip, corrupted-digest failure</td></tr>
+<tr><td>12</td><td>Micro + polish</td><td><code>NatsMicro</code> make/layer/client; JSDoc pass to Effect standard, README, AGENTS.md conventions entry</td><td>integration: $SRV discovery, error headers; docs review + doctests</td></tr>
+</table>
+</div>
+
+<p>Each phase lands as its own branch/PR against this design. Anything
+discovered mid-implementation that contradicts a section above amends this
+document first — the document, not the diff, is the contract.</p>
+</section>
+
+</body>
+</html>

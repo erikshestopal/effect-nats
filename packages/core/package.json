@@ -1,5 +1,5 @@
 {
-  "name": "@effect-nats/core",
+  "name": "effect-nats",
   "version": "0.0.0",
   "type": "module",
   "sideEffects": [],
