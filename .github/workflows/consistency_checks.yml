@@ -1,0 +1,42 @@
+name: Workspace Consistency Checks
+
+on:
+  workflow_call:
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        deno-version: [2.7.x]
+        module: [
+          core,
+          jetstream,
+          kv,
+          obj,
+          services,
+          nst,
+          transport-deno,
+          transport-node,
+        ]
+
+    steps:
+      - name: Git Checkout Sources
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install Deno ${{ matrix.deno-version }}
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: ${{ matrix.deno-version }}
+
+      - name: Lint Deno Modules
+        run: |
+          deno fmt --check ${{ matrix.module }}/
+          deno lint ${{ matrix.module }}/
+
+      - name: Check Versions
+        run: |
+          deno run -A bin/check-bundle-version.ts --module ${{ matrix.module }}
+          deno task check-dependencies

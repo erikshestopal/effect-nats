@@ -1,0 +1,213 @@
+/*
+ * Copyright 2023-2024 The NATS Authors
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+export {
+  AdvisoryKind,
+  DirectMsgHeaders,
+  isBoundPushConsumerOptions,
+  isOrderedPushConsumerOptions,
+  isPullConsumer,
+  isPushConsumer,
+  JsHeaders,
+  RepublishHeaders,
+} from "./types.ts";
+
+export {
+  jetstream,
+  JetStreamClientImpl,
+  jetstreamManager,
+  startFastIngest,
+  toJetStreamClient,
+} from "./jsclient.ts";
+
+export type {
+  AbortOnMissingResource,
+  Advisory,
+  Batch,
+  BatchAck,
+  BatchMessageOptions,
+  BatchMessageOptionsWithReply,
+  Bind,
+  BoundPushConsumerOptions,
+  Close,
+  Closed,
+  ConsumeBytes,
+  ConsumeCallback,
+  ConsumeMessages,
+  ConsumeOptions,
+  Consumer,
+  ConsumerAPI,
+  ConsumerCallbackFn,
+  ConsumerDeleted,
+  ConsumerKind,
+  ConsumerMessages,
+  ConsumerNotFound,
+  ConsumerNotification,
+  ConsumerPinned,
+  Consumers,
+  ConsumerUnpinned,
+  Debug,
+  DeleteableConsumer,
+  Destroyable,
+  DirectMsg,
+  DirectStreamAPI,
+  Discard,
+  ExceededLimits,
+  Expires,
+  ExportedConsumer,
+  FastIngest,
+  FastIngestOptions,
+  FastIngestProgress,
+  FetchBytes,
+  FetchMessages,
+  FetchOptions,
+  FlowControl,
+  Heartbeat,
+  HeartbeatsMissed,
+  IdleHeartbeat,
+  InfoableConsumer,
+  JetStreamClient,
+  JetStreamManager,
+  JetStreamManagerOptions,
+  JetStreamOptions,
+  JetStreamPublishOptions,
+  Lister,
+  ListerFieldFilter,
+  MaxBytes,
+  MaxMessages,
+  Next,
+  NextOptions,
+  NoResponders,
+  OrderedConsumerOptions,
+  OrderedConsumerRecreated,
+  OrderedPushConsumerOptions,
+  PredefinedSchedule,
+  PubAck,
+  PushConsumer,
+  PushConsumerOptions,
+  Reset,
+  ScheduleCancellation,
+  ScheduleOptions,
+  ScheduleSpec,
+  StoredMsg,
+  Stream,
+  StreamAPI,
+  StreamExpectations,
+  StreamNotFound,
+  Streams,
+  ThresholdBytes,
+  ThresholdMessages,
+} from "./types.ts";
+
+export type { PushConsumerMessagesImpl } from "./pushconsumer.ts";
+
+export { BaseApiClientImpl, type StreamNames } from "./jsbaseclient_api.ts";
+
+export { DirectMsgImpl } from "./jsm_direct.ts";
+
+export type {
+  AccountLimits,
+  ApiError,
+  ApiPaged,
+  ApiPagedRequest,
+  BatchCallback,
+  ClusterInfo,
+  CompletionResult,
+  ConsumerApiOptions,
+  ConsumerConfig,
+  ConsumerCreateOptions,
+  ConsumerInfo,
+  ConsumerResetResponse,
+  ConsumerUpdateConfig,
+  DirectBatch,
+  DirectBatchLimits,
+  DirectBatchOptions,
+  DirectBatchStartSeq,
+  DirectBatchStartTime,
+  DirectLastFor,
+  DirectMaxBytes,
+  DirectMsgRequest,
+  ExternalStream,
+  JetStreamAccountStats,
+  JetStreamApiStats,
+  JetStreamUsage,
+  JetStreamUsageAccountLimits,
+  LastForMsgRequest,
+  LostStreamData,
+  MsgDeleteRequest,
+  MsgRequest,
+  NextMsgRequest,
+  OverflowMinAckPending,
+  OverflowMinPending,
+  OverflowMinPendingAndMinAck,
+  OverflowOptions,
+  PeerInfo,
+  Placement,
+  PrioritizedOptions,
+  PriorityGroups,
+  PriorityPolicy,
+  PullOptions,
+  PurgeBySeq,
+  PurgeBySubject,
+  PurgeOpts,
+  PurgeResponse,
+  PurgeTrimOpts,
+  Republish,
+  SeqMsgRequest,
+  SequenceInfo,
+  StartTimeMsgRequest,
+  StreamAlternate,
+  StreamConfig,
+  StreamConsumerLimits,
+  StreamConsumerSource,
+  StreamInfo,
+  StreamListResponse,
+  StreamSource,
+  StreamSourceInfo,
+  StreamState,
+  StreamUpdateConfig,
+  SubjectTransformConfig,
+  Success,
+} from "./jsapi_types.ts";
+
+export type { JsMsg } from "./jsmsg.ts";
+
+export {
+  AckPolicy,
+  DeliverPolicy,
+  DiscardPolicy,
+  PersistMode,
+  PubHeaders,
+  ReplayPolicy,
+  RetentionPolicy,
+  StorageType,
+  StoreCompression,
+} from "./jsapi_types.ts";
+
+export type { DeliveryInfo, StreamInfoRequestOptions } from "./jsapi_types.ts";
+
+export { ListerImpl } from "./jslister.ts";
+
+export {
+  isMessageNotFound,
+  JetStreamApiCodes,
+  JetStreamApiError,
+  JetStreamError,
+  JetStreamStatus,
+  JetStreamStatusError,
+  jserrors,
+} from "./jserrors.ts";
+
+export { validateStreamName } from "./jsutil.ts";

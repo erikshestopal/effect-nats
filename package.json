@@ -1,0 +1,14 @@
+{
+  "workspaces": [
+    "./core",
+    "./jetstream",
+    "./kv",
+    "./obj",
+    "./services",
+    "./nst",
+    "./transport-node"
+  ],
+  "dependencies": {
+    "tweetnacl": "^1.0.3"
+  }
+}

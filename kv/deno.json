@@ -1,0 +1,39 @@
+{
+  "name": "@nats-io/kv",
+  "version": "3.4.0",
+  "exports": {
+    ".": "./src/mod.ts",
+    "./internal": "./src/internal_mod.ts"
+  },
+  "publish": {
+    "exclude": [
+      "./.npmrc",
+      "./build/",
+      "./examples/",
+      "./import_map.json",
+      "./node_modules/",
+      "./package-lock.json",
+      "./package.json",
+      "./tests/",
+      "./tsconfig.json",
+      "./typedoc.json"
+    ]
+  },
+  "lint": {
+    "exclude": [
+      "lib/"
+    ]
+  },
+  "fmt": {
+    "exclude": [
+      "lib/"
+    ]
+  },
+  "tasks": {
+    "test": "deno test -A --parallel --reload --quiet tests/ --import-map=import_map.json"
+  },
+  "imports": {
+    "@nats-io/nats-core": "jsr:@nats-io/nats-core@3.4.0",
+    "@nats-io/jetstream": "jsr:@nats-io/jetstream@3.4.0"
+  }
+}
