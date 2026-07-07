@@ -26,6 +26,9 @@ export default defineConfig({
       "check:test": {
         command: "bunx --bun vp test run",
       },
+      "check:coverage": {
+        command: "bunx --bun vp test run --coverage",
+      },
       "check:typecheck": {
         command: "tsgo --noEmit",
       },
@@ -35,6 +38,17 @@ export default defineConfig({
     passWithNoTests: true,
     include: ["packages/*/test/**/*.test.ts"],
     exclude: ["node_modules", "dist", "repos", "docs"],
+    coverage: {
+      provider: "v8",
+      include: ["packages/*/src/**"],
+      exclude: ["packages/*/test/**"],
+      thresholds: {
+        lines: 100,
+        functions: 100,
+        branches: 100,
+        statements: 100,
+      },
+    },
     server: {
       deps: {
         inline: ["@effect/vitest"],
