@@ -1,0 +1,77 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Effect-TS/tsgo/refs/heads/main/schema.json",
+  "name": "effect-nats",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "check": "vp run --log labeled check:all",
+    "typecheck": "tsgo --noEmit",
+    "prepare": "vp config && effect-tsgo patch"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.93"
+  },
+  "devDependencies": {
+    "@ast-grep/cli": "0.44.1",
+    "@effect/tsgo": "0.16.1",
+    "@effect/vitest": "4.0.0-beta.93",
+    "@types/bun": "1.3.14",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "expect-type": "1.4.0",
+    "typescript": "7.0.1-rc",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.3",
+    "vite-plus": "0.2.3"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.3"
+  },
+  "packageManager": "bun@1.3.14",
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "overrides": [
+          {
+            "include": [
+              "packages/*/test/**/*",
+              "./packages/*/test/**/*"
+            ],
+            "options": {
+              "diagnostics": false
+            }
+          }
+        ],
+        "diagnosticSeverity": {
+          "asyncFunction": "warning",
+          "cryptoRandomUUID": "warning",
+          "cryptoRandomUUIDInEffect": "warning",
+          "extendsNativeError": "warning",
+          "globalConsole": "warning",
+          "globalConsoleInEffect": "warning",
+          "globalDate": "warning",
+          "globalDateInEffect": "warning",
+          "globalFetch": "warning",
+          "globalFetchInEffect": "warning",
+          "globalRandom": "warning",
+          "globalRandomInEffect": "warning",
+          "globalTimers": "warning",
+          "globalTimersInEffect": "warning",
+          "instanceOfSchema": "warning",
+          "newPromise": "warning",
+          "nodeBuiltinImport": "warning",
+          "preferSchemaOverJson": "warning",
+          "processEnv": "warning",
+          "processEnvInEffect": "warning",
+          "unsafeEffectTypeAssertion": "warning"
+        }
+      }
+    ]
+  },
+  "trustedDependencies": [
+    "@ast-grep/cli"
+  ]
+}

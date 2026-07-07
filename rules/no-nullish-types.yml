@@ -1,0 +1,21 @@
+id: no-nullish-types
+language: TypeScript
+severity: error
+message: Use Option.Option<T> from effect instead of nullish type unions.
+files:
+  - packages/*/src/**/*.ts
+  - packages/*/test/**/*.ts
+rule:
+  any:
+    - pattern:
+        context: type T = $TYPE | null
+        selector: union_type
+    - pattern:
+        context: type T = null | $TYPE
+        selector: union_type
+    - pattern:
+        context: type T = $TYPE | undefined
+        selector: union_type
+    - pattern:
+        context: type T = undefined | $TYPE
+        selector: union_type

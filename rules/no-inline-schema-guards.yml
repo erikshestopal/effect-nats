@@ -1,0 +1,9 @@
+id: no-inline-schema-guards
+language: TypeScript
+severity: error
+message: Bind Schema-generated guards where the model is defined (for example, const isCompaction = SessionEntry.guards.Compaction) instead of calling generated guards inline.
+files:
+  - packages/*/src/**/*.ts
+  - packages/*/test/**/*.ts
+rule:
+  pattern: $SCHEMA.guards.$GUARD($$$ARGS)
