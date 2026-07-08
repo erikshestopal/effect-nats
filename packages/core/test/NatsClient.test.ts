@@ -1,5 +1,18 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Clock, Config, ConfigProvider, Deferred, Duration, Effect, Layer, Option, Predicate, Redacted } from "effect";
+import {
+  Clock,
+  Config,
+  ConfigProvider,
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Redacted,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
 import {
   AuthorizationError,
   ClosedConnectionError,
@@ -472,6 +485,189 @@ describe("NatsClient", () => {
           subscription.unsubscribe();
           assert.strictEqual(timeout._tag, "TimeoutError");
         }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("subscribes as a scoped stream of NatsMessage values", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const messages = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          const collect = client.subscribe("phase5.*").pipe(Stream.take(2), Stream.runCollect);
+          const publish = Effect.gen(function* () {
+            yield* Effect.yieldNow;
+            yield* TestClock.adjust("500 millis");
+            yield* client.publish("phase5.one", { payload: encoder.encode("one") });
+            yield* client.publish("phase5.two", { payload: encoder.encode("two") });
+          });
+          const [messages] = yield* Effect.all([collect, publish], { concurrency: "unbounded" });
+          return messages;
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+
+      assert.deepStrictEqual(
+        messages.map((message) => [message.subject, message.text]),
+        [
+          ["phase5.one", "one"],
+          ["phase5.two", "two"],
+        ],
+      );
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("load balances queue subscriptions", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const received = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          const left = client.subscribe("phase5.queue", { queue: "workers" });
+          const right = client.subscribe("phase5.queue", { queue: "workers" });
+          const collect = left.pipe(Stream.merge(right), Stream.take(4), Stream.runCollect);
+          const publish = Effect.gen(function* () {
+            yield* Effect.yieldNow;
+            yield* TestClock.adjust("500 millis");
+            yield* client.publish("phase5.queue", { payload: encoder.encode("1") });
+            yield* client.publish("phase5.queue", { payload: encoder.encode("2") });
+            yield* client.publish("phase5.queue", { payload: encoder.encode("3") });
+            yield* client.publish("phase5.queue", { payload: encoder.encode("4") });
+          });
+          const [received] = yield* Effect.all([collect, publish], { concurrency: "unbounded" });
+          return received;
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+
+      assert.strictEqual(received.length, 4);
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("subscribes as a scoped stream of raw SDK messages", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const messages = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          const collect = client.subscribeRaw("phase5.raw", { max: 1 }).pipe(Stream.runCollect);
+          const publish = Effect.gen(function* () {
+            yield* Effect.yieldNow;
+            yield* TestClock.adjust("500 millis");
+            yield* client.publish("phase5.raw", { payload: encoder.encode("raw") });
+          });
+          const [messages] = yield* Effect.all([collect, publish], { concurrency: "unbounded" });
+          return messages;
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+
+      assert.strictEqual(messages[0]?.subject, "phase5.raw");
+      assert.strictEqual(messages[0] ? decoder.decode(messages[0].data) : undefined, "raw");
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("collects requestMany responses with the count strategy", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const responses = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          for (const text of ["a", "b", "c"]) {
+            client.connection.subscribe("phase5.many", {
+              max: 1,
+              callback: (_error, message) => {
+                if (Predicate.isNotUndefined(message)) {
+                  message.respond(
+                    encoder.encode(text),
+                    Predicate.isNotUndefined(message.headers) ? { headers: message.headers } : {},
+                  );
+                }
+              },
+            });
+          }
+          return yield* client
+            .requestMany("phase5.many", { maxWait: "1 second", maxMessages: 3, headers: { "X-Many": "yes" } })
+            .pipe(Stream.runCollect);
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+
+      assert.deepStrictEqual(responses.map((message) => message.text).sort(), ["a", "b", "c"]);
+      assert.deepStrictEqual(
+        responses.map((message) => NatsHeaders.get(message.headers, "X-Many")),
+        [Option.some("yes"), Option.some("yes"), Option.some("yes")],
+      );
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("exposes connection status and stats", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          const status = client.status;
+          const stats = yield* client.stats;
+
+          assert.isObject(status);
+          assert.strictEqual(stats.outMsgs, 0);
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("collects requestMany responses with stall, sentinel, and timer strategies", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const responses = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          client.connection.subscribe("phase5.stall", {
+            max: 1,
+            callback: (_error, message) => {
+              if (Predicate.isNotUndefined(message)) {
+                message.respond(encoder.encode("stall"));
+              }
+            },
+          });
+          client.connection.subscribe("phase5.sentinel", {
+            max: 1,
+            callback: (_error, message) => {
+              if (Predicate.isNotUndefined(message)) {
+                message.respond(encoder.encode("sentinel"));
+                message.respond();
+              }
+            },
+          });
+          client.connection.subscribe("phase5.timer", {
+            max: 1,
+            callback: (_error, message) => {
+              if (Predicate.isNotUndefined(message)) {
+                message.respond(encoder.encode("timer"));
+              }
+            },
+          });
+
+          const stall = yield* client
+            .requestMany("phase5.stall", { maxWait: "1 second", stall: "50 millis" })
+            .pipe(Stream.runCollect);
+          const sentinel = yield* client
+            .requestMany("phase5.sentinel", { maxWait: "1 second", sentinel: true })
+            .pipe(Stream.runCollect);
+          const timer = yield* client.requestMany("phase5.timer", { maxWait: "50 millis" }).pipe(Stream.runCollect);
+          return { stall, sentinel, timer };
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+
+      assert.deepStrictEqual(
+        responses.stall.map((message) => message.text),
+        ["stall"],
+      );
+      assert.deepStrictEqual(
+        responses.sentinel.map((message) => message.text),
+        ["sentinel", ""],
+      );
+      assert.deepStrictEqual(
+        responses.timer.map((message) => message.text),
+        ["timer"],
       );
     }).pipe(Effect.provide(TestNatsServer.layer)),
   );

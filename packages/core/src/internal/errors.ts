@@ -119,7 +119,7 @@ export const mapRequestError = (options: { readonly subject: string; readonly ca
   return new NatsError.RequestError({ subject: options.subject, cause });
 };
 
-const mapError = (cause: Error): NatsError.NatsError => {
+export const mapError = (cause: unknown): NatsError.NatsError => {
   // ast-grep-ignore: no-instanceof
   if (cause instanceof TimeoutError) {
     return new NatsError.TimeoutError();

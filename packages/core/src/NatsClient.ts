@@ -3,15 +3,31 @@
  *
  * @since 0.1.0
  */
-import { Config, Context, Duration, Effect, Layer, Option, Predicate, Schema, Scope } from "effect";
-import type { ConnectionOptions, NatsConnection, Payload, TlsOptions } from "@nats-io/nats-core";
+import { Config, Context, Duration, Effect, Layer, Option, Predicate, Schema, Scope, Stream } from "effect";
+import type {
+  ConnectionOptions,
+  Msg,
+  NatsConnection,
+  Payload,
+  Stats,
+  Status,
+  Subscription,
+  TlsOptions,
+} from "@nats-io/nats-core";
 import type { Input as DurationInput } from "effect/Duration";
 import * as NatsHeaders from "./NatsHeaders.ts";
 import * as NatsMessage from "./NatsMessage.ts";
 import * as NatsConnector from "./NatsConnector.ts";
 import * as NatsError from "./NatsError.ts";
 import * as Errors from "./internal/errors.ts";
+import * as Iterator from "./internal/iterator.ts";
 import * as OptionsInternal from "./internal/options.ts";
+
+/** @since 0.1.0 @category models */
+export type ConnectionStatus = Status;
+
+/** @since 0.1.0 @category models */
+export type { Stats };
 
 /** @since 0.1.0 @category models */
 export interface Service {
@@ -44,6 +60,17 @@ export interface Service {
     | NatsError.ClosedConnectionError
     | NatsError.DrainingConnectionError
   >;
+  readonly subscribe: (
+    subject: string,
+    options?: SubscribeOptions,
+  ) => Stream.Stream<NatsMessage.NatsMessage, NatsError.NatsError>;
+  readonly subscribeRaw: (subject: string, options?: SubscribeOptions) => Stream.Stream<Msg, NatsError.NatsError>;
+  readonly requestMany: (
+    subject: string,
+    options: RequestManyOptions,
+  ) => Stream.Stream<NatsMessage.NatsMessage, NatsError.NatsError>;
+  readonly status: Stream.Stream<ConnectionStatus>;
+  readonly stats: Effect.Effect<Stats>;
 }
 
 /** @since 0.1.0 @category options */
@@ -64,6 +91,22 @@ export type RequestOptions = {
    * @default "1 second"
    */
   readonly timeout?: DurationInput;
+};
+
+/** @since 0.1.0 @category options */
+export type SubscribeOptions = {
+  readonly queue?: string;
+  readonly max?: number;
+};
+
+/** @since 0.1.0 @category options */
+export type RequestManyOptions = {
+  readonly payload?: Payload;
+  readonly headers?: NatsHeaders.Input;
+  readonly maxWait: DurationInput;
+  readonly maxMessages?: number;
+  readonly stall?: DurationInput;
+  readonly sentinel?: boolean;
 };
 
 /** @since 0.1.0 @category services */
@@ -118,6 +161,7 @@ export class NKey extends Schema.TaggedClass<NKey>()("NKey", {
 export type Auth = UserPass | Token | Creds | NKey;
 
 export const drainTimeout = "5 seconds";
+const subscriptionDrainTimeout = "100 millis";
 
 const release = (connection: NatsConnection) =>
   Effect.tryPromise(() => connection.drain()).pipe(
@@ -125,6 +169,31 @@ const release = (connection: NatsConnection) =>
     Effect.catch(() => Effect.tryPromise(() => connection.close())),
     Effect.ignore,
   );
+
+const releaseSubscription = (subscription: Subscription) =>
+  Effect.tryPromise(() => subscription.drain()).pipe(
+    Effect.timeout(subscriptionDrainTimeout),
+    Effect.catch(() => Effect.sync(() => subscription.unsubscribe())),
+    Effect.ignore,
+  );
+
+const requestManyStrategy = (options: RequestManyOptions) => {
+  if (Predicate.isNotUndefined(options.maxMessages)) {
+    return "count";
+  }
+  if (Predicate.isNotUndefined(options.stall)) {
+    return "stall";
+  }
+  if (options.sentinel === true) {
+    return "sentinel";
+  }
+  return "timer";
+};
+
+/* v8 ignore next -- SDK status iterators are not expected to throw. */
+const statusError = (cause: unknown): never => {
+  throw cause;
+};
 
 /** @since 0.1.0 @category constructors */
 export const make = (
@@ -166,6 +235,52 @@ export const make = (
             }),
           catch: (cause) => Errors.mapRequestError({ subject, cause }),
         }).pipe(Effect.map(NatsMessage.fromMsg)),
+      subscribeRaw: (subject, options = {}) =>
+        Iterator.streamFromQueuedIterator<Msg, Subscription, Msg, NatsError.NatsError>({
+          acquire: Effect.try({
+            try: () => connection.subscribe(subject, options),
+            catch: Errors.mapError,
+          }),
+          transform: (message) => message,
+          onError: Errors.mapError,
+          onRelease: releaseSubscription,
+        }),
+      subscribe: (subject, options = {}) =>
+        Iterator.streamFromQueuedIterator<Msg, Subscription, NatsMessage.NatsMessage, NatsError.NatsError>({
+          acquire: Effect.try({
+            try: () => connection.subscribe(subject, options),
+            catch: Errors.mapError,
+          }),
+          transform: NatsMessage.fromMsg,
+          onError: Errors.mapError,
+          onRelease: releaseSubscription,
+        }),
+      requestMany: (subject, options) =>
+        Stream.unwrap(
+          Effect.tryPromise({
+            try: () =>
+              connection.requestMany(subject, options.payload, {
+                strategy: requestManyStrategy(options),
+                maxWait: Duration.toMillis(options.maxWait),
+                ...(Predicate.isNotUndefined(options.maxMessages) ? { maxMessages: options.maxMessages } : {}),
+                ...(Predicate.isNotUndefined(options.stall) ? { stall: Duration.toMillis(options.stall) } : {}),
+                ...(Predicate.isNotUndefined(options.headers)
+                  ? { headers: NatsHeaders.toMsgHdrs(options.headers) }
+                  : {}),
+              }),
+            catch: Errors.mapError,
+          }).pipe(
+            Effect.map((iter) =>
+              Iterator.streamFromQueuedIterator<Msg, AsyncIterable<Msg>, NatsMessage.NatsMessage, NatsError.NatsError>({
+                acquire: Effect.succeed(iter),
+                transform: NatsMessage.fromMsg,
+                onError: Errors.mapError,
+              }),
+            ),
+          ),
+        ),
+      status: Stream.fromAsyncIterable(connection.status(), statusError),
+      stats: Effect.sync(() => connection.stats()),
     });
   });
 
