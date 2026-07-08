@@ -14,4 +14,5 @@ export * as JetStreamError from "./JetStreamError.ts";
 export * as JetStreamManager from "./JetStreamManager.ts";
 export * as JsMessage from "./JsMessage.ts";
 export * as NatsKv from "./NatsKv.ts";
+export * as NatsMicro from "./NatsMicro.ts";
 export * as NatsObjectStore from "./NatsObjectStore.ts";
