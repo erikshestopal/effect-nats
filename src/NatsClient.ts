@@ -87,7 +87,7 @@ export interface Service {
     subject: string,
     options: RequestManyOptions,
   ) => Stream.Stream<NatsMessage.NatsMessage, NatsError.NatsError>;
-  readonly status: Stream.Stream<ConnectionStatus>;
+  readonly status: Stream.Stream<ConnectionStatus, NatsError.NatsError>;
   readonly stats: Effect.Effect<Stats>;
 }
 
@@ -201,11 +201,6 @@ const requestManyStrategy = (options: RequestManyOptions) =>
     Match.orElse(() => "timer" as const),
   );
 
-/* v8 ignore next -- SDK status iterators are not expected to throw. */
-const statusError = (cause: unknown): never => {
-  throw cause;
-};
-
 /**
  * Constructs a scoped NATS client service.
  *
@@ -289,7 +284,7 @@ export const make = Effect.fnUntraced(function* (options: Options = {}) {
           ),
         ),
       ),
-    status: Stream.fromAsyncIterable(connection.status(), statusError),
+    status: Stream.fromAsyncIterable(connection.status(), Errors.mapError),
     stats: Effect.sync(() => connection.stats()),
   });
 });
