@@ -127,7 +127,27 @@ export const create = (
     return makeBucket(sdk);
   });
 
-/** @since 0.1.0 @category layers */
+/**
+ * Provides a scoped KV bucket service.
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import * as NatsKv from "effect-nats/NatsKv"
+ *
+ * const program = Effect.gen(function*() {
+ *   const kv = yield* NatsKv.NatsKv
+ *   yield* kv.put("config", new TextEncoder().encode("value"))
+ *   return yield* kv.get("config")
+ * })
+ * ```
+ *
+ * @see {@link create} for constructing a bucket handle effectfully
+ * @see {@link open} for opening an existing bucket
+ *
+ * @since 0.1.0
+ * @category layers
+ */
 export const layer = (
   bucket: string,
   options: BucketOptions = {},

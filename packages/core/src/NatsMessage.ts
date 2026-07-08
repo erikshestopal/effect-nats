@@ -35,6 +35,7 @@ export type RespondOptions = {
 const decoder = new TextDecoder();
 const sdkMessages = new WeakMap<NatsMessage, Msg>();
 
+/** @since 0.1.0 @category constructors */
 export const fromMsg = (msg: Msg): NatsMessage => {
   const message = NatsMessage.make({
     subject: msg.subject,

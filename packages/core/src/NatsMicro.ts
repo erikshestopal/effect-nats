@@ -98,7 +98,28 @@ export const make = <R>(
     };
   });
 
-/** @since 0.1.0 @category layers */
+/**
+ * Runs a declarative NATS service for the layer lifetime.
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import * as NatsMicro from "effect-nats/NatsMicro"
+ *
+ * const Echo = NatsMicro.layer({
+ *   name: "echo",
+ *   version: "1.0.0",
+ *   endpoints: {
+ *     echo: { handler: (message) => Effect.succeed(message.payload) }
+ *   }
+ * })
+ * ```
+ *
+ * @see {@link make} for constructing and returning the running service
+ *
+ * @since 0.1.0
+ * @category layers
+ */
 export const layer = <R>(
   options: ServiceOptions<R>,
 ): Layer.Layer<never, NatsError.NatsError, NatsClient.NatsClient | R> => Layer.effectDiscard(make(options));
@@ -221,5 +242,8 @@ const incrementError = (options: { readonly errorCounts: Record<string, number>;
 const release = (service: SdkService): Effect.Effect<void> =>
   Effect.tryPromise(() => service.stop()).pipe(Effect.asVoid, Effect.ignore);
 
+/** @since 0.1.0 @category errors */
 export { ServiceError, ServiceErrorCodeHeader, ServiceErrorHeader };
+
+/** @since 0.1.0 @category models */
 export type { ServiceIdentity, ServiceInfo, ServiceStats };

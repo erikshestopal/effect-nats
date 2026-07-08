@@ -63,6 +63,7 @@ export const fromInput: (input?: Input) => NatsHeaders = (input) => {
   return make(headers);
 };
 
+/** @since 0.1.0 @category constructors */
 export const fromMsgHdrs = (input: MsgHdrs): NatsHeaders => {
   const headers = makeMsgHdrs();
   for (const [key, values] of input) {
@@ -73,6 +74,7 @@ export const fromMsgHdrs = (input: MsgHdrs): NatsHeaders => {
   return make(headers);
 };
 
+/** @since 0.1.0 @category destructors */
 export const toMsgHdrs = (input: Input): MsgHdrs => raw(fromInput(input));
 
 /* v8 ignore next -- only NatsHeaders values created in this module have access to raw state */

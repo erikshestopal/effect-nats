@@ -4,6 +4,8 @@ Effect-native wrappers for the NATS JavaScript SDK. The package keeps the upstre
 
 See the full design contract in [`docs/DESIGN.html`](docs/DESIGN.html).
 
+The snippets below are mirrored as typechecked programs in [`examples/`](examples/).
+
 ## Quickstart
 
 ```ts

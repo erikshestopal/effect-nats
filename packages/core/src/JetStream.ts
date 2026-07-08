@@ -24,7 +24,30 @@ import * as Iterators from "./internal/iterator.ts";
 import * as JsOptions from "./internal/jsOptions.ts";
 import * as JsErrors from "./internal/mapJsError.ts";
 
-/** @since 0.1.0 @category models */
+/**
+ * Runtime JetStream operations.
+ *
+ * @example
+ * ```ts
+ * import { Effect, Stream } from "effect"
+ * import * as JetStream from "effect-nats/JetStream"
+ * import * as JsMessage from "effect-nats/JsMessage"
+ *
+ * const program = Effect.gen(function*() {
+ *   const js = yield* JetStream.JetStream
+ *   yield* js.publish("orders.created")
+ *   const messages = yield* JsMessage.JsMessageService
+ *   const consumer = yield* js.consumer("ORDERS", "processor")
+ *   yield* consumer.consume().pipe(
+ *     Stream.mapEffect((msg) => messages.processWith({ handler: () => Effect.void })(msg)),
+ *     Stream.runDrain
+ *   )
+ * })
+ * ```
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface Service {
   readonly client: JetStreamClient;
   readonly publish: (
@@ -208,10 +231,18 @@ const makeConsumer = (state: { readonly consumer: Consumer; readonly messages: J
 const closeConsumerMessages = (messages: ConsumerMessages): Effect.Effect<void> =>
   Effect.tryPromise(() => messages.close()).pipe(Effect.asVoid, Effect.ignore);
 
-/** @since 0.1.0 @category layers */
+/**
+ * Provides JetStream and the JetStream message acknowledgment service.
+ *
+ * @see {@link make} for constructing the service effectfully
+ *
+ * @since 0.1.0
+ * @category layers
+ */
 export const layer = (
   options: JetStreamOptions = {},
 ): Layer.Layer<JetStream | JsMessage.JsMessageService, never, NatsClient.NatsClient> =>
   Layer.effect(JetStream, make(options)).pipe(Layer.provideMerge(JsMessage.layer));
 
+/** @since 0.1.0 @category models */
 export type { ConsumerInfo, ConsumerNotification, OrderedConsumerOptions };

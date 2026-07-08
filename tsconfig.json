@@ -62,7 +62,7 @@
       }
     ]
   },
-  "include": ["packages/*/src/**/*", "packages/*/test/**/*"],
+  "include": ["packages/*/src/**/*", "packages/*/test/**/*", "examples/**/*.ts"],
   "exclude": ["node_modules", "dist", "repos", "docs"],
   "$schema": "https://raw.githubusercontent.com/Effect-TS/tsgo/refs/heads/main/schema.json"
 }

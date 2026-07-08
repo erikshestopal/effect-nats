@@ -29,7 +29,26 @@ export type ConnectionStatus = Status;
 /** @since 0.1.0 @category models */
 export type { Stats };
 
-/** @since 0.1.0 @category models */
+/**
+ * Runtime NATS connection operations.
+ *
+ * @example
+ * ```ts
+ * import { Effect, Stream } from "effect"
+ * import * as NatsClient from "effect-nats/NatsClient"
+ *
+ * const program = Effect.gen(function*() {
+ *   const nats = yield* NatsClient.NatsClient
+ *   yield* nats.publish("events.created", { payload: new TextEncoder().encode("hello") })
+ *   const response = yield* nats.request("rpc.echo")
+ *   yield* nats.subscribe("events.created").pipe(Stream.take(1), Stream.runDrain)
+ *   return response.text
+ * })
+ * ```
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface Service {
   readonly connection: NatsConnection;
   readonly closed: Effect.Effect<Option.Option<NatsError.NatsError>>;
@@ -109,7 +128,16 @@ export type RequestManyOptions = {
   readonly sentinel?: boolean;
 };
 
-/** @since 0.1.0 @category services */
+/**
+ * Service tag for a scoped NATS connection.
+ *
+ * @see {@link make} for constructing the service effectfully
+ * @see {@link layer} for providing it from explicit options
+ * @see {@link layerConfig} for providing it from `Config`
+ *
+ * @since 0.1.0
+ * @category services
+ */
 export class NatsClient extends Context.Service<NatsClient, Service>()("effect-nats/NatsClient") {}
 
 /** @since 0.1.0 @category options */
@@ -195,7 +223,15 @@ const statusError = (cause: unknown): never => {
   throw cause;
 };
 
-/** @since 0.1.0 @category constructors */
+/**
+ * Constructs a scoped NATS client service.
+ *
+ * @see {@link layer} for the layer form
+ * @see {@link layerConfig} for the config-driven layer form
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const make = (
   options: Options = {},
 ): Effect.Effect<
@@ -284,13 +320,45 @@ export const make = (
     });
   });
 
-/** @since 0.1.0 @category layers */
+/**
+ * Provides a scoped NATS client from explicit connection options.
+ *
+ * @example
+ * ```ts
+ * import { Effect, Layer } from "effect"
+ * import * as NatsClient from "effect-nats/NatsClient"
+ * import * as NodeConnector from "effect-nats/NodeConnector"
+ *
+ * const NatsLive = NatsClient.layer({ servers: "nats://127.0.0.1:4222" }).pipe(
+ *   Layer.provide(NodeConnector.layer)
+ * )
+ *
+ * const program = Effect.gen(function*() {
+ *   const nats = yield* NatsClient.NatsClient
+ *   yield* nats.publish("events.created")
+ * }).pipe(Effect.scoped, Effect.provide(NatsLive))
+ * ```
+ *
+ * @see {@link make} for constructing the service effectfully
+ * @see {@link layerConfig} for the config-driven layer form
+ *
+ * @since 0.1.0
+ * @category layers
+ */
 export const layer = (
   options: Options = {},
 ): Layer.Layer<NatsClient, NatsError.ConnectionError | NatsError.TimeoutError, NatsConnector.NatsConnector> =>
   Layer.effect(NatsClient, make(options));
 
-/** @since 0.1.0 @category layers */
+/**
+ * Provides a scoped NATS client from `Config` values.
+ *
+ * @see {@link make} for constructing the service effectfully
+ * @see {@link layer} for explicit options
+ *
+ * @since 0.1.0
+ * @category layers
+ */
 export const layerConfig = (options: {
   readonly servers?: Config.Config<string | ReadonlyArray<string>>;
   readonly name?: Config.Config<string>;

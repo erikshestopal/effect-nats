@@ -223,4 +223,5 @@ export const layer = (
   NatsClient.NatsClient
 > => Layer.effect(JetStreamManager, make(options));
 
+/** @since 0.1.0 @category models */
 export type { AckPolicy, ConsumerInfo, DeliverPolicy, ReplayPolicy, RetentionPolicy, StorageType, StreamInfo };

@@ -50,7 +50,23 @@ export type ProcessWithOptions = {
   readonly nakDelay?: DurationInput;
 };
 
-/** @since 0.1.0 @category services */
+/**
+ * Operations that require the SDK-backed JetStream message handle.
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import * as JsMessage from "effect-nats/JsMessage"
+ *
+ * const handle = (msg: JsMessage.JsMessage) => Effect.gen(function*() {
+ *   const messages = yield* JsMessage.JsMessageService
+ *   yield* messages.processWith({ handler: () => Effect.void })(msg)
+ * })
+ * ```
+ *
+ * @since 0.1.0
+ * @category services
+ */
 export interface Service {
   readonly fromJsMsg: (msg: JsMsg) => JsMessage;
   readonly ack: (self: JsMessage) => Effect.Effect<void>;

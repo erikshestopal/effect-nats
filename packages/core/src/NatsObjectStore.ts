@@ -141,7 +141,27 @@ export const create = (
     return makeStore(sdk);
   });
 
-/** @since 0.1.0 @category layers */
+/**
+ * Provides a scoped ObjectStore bucket service.
+ *
+ * @example
+ * ```ts
+ * import { Effect, Option, Stream } from "effect"
+ * import * as NatsObjectStore from "effect-nats/NatsObjectStore"
+ *
+ * const program = Effect.gen(function*() {
+ *   const store = yield* NatsObjectStore.NatsObjectStore
+ *   yield* store.put({ name: "artifact" }, Stream.make(new TextEncoder().encode("data")))
+ *   return yield* store.get("artifact").pipe(Effect.map(Option.getOrThrow))
+ * })
+ * ```
+ *
+ * @see {@link create} for constructing a bucket handle effectfully
+ * @see {@link open} for opening an existing bucket
+ *
+ * @since 0.1.0
+ * @category layers
+ */
 export const layer = (
   bucket: string,
   options: BucketOptions = {},
