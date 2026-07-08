@@ -11,3 +11,4 @@ export * as NatsMessage from "./NatsMessage.ts";
 export * as NodeConnector from "./NodeConnector.ts";
 export * as JetStream from "./JetStream.ts";
 export * as JetStreamError from "./JetStreamError.ts";
+export * as JsMessage from "./JsMessage.ts";

@@ -3,15 +3,23 @@
  *
  * @since 0.1.0
  */
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
 import { jetstream } from "@nats-io/jetstream";
 import type { Payload } from "@nats-io/nats-core";
-import type { JetStreamClient } from "@nats-io/jetstream";
+import type {
+  Consumer,
+  ConsumerInfo,
+  ConsumerMessages,
+  JetStreamClient,
+  OrderedConsumerOptions,
+} from "@nats-io/jetstream";
 import type { Input as DurationInput } from "effect/Duration";
 import * as JetStreamError from "./JetStreamError.ts";
+import * as JsMessage from "./JsMessage.ts";
 import * as NatsClient from "./NatsClient.ts";
 import * as NatsError from "./NatsError.ts";
 import * as NatsHeaders from "./NatsHeaders.ts";
+import * as Iterators from "./internal/iterator.ts";
 import * as JsOptions from "./internal/jsOptions.ts";
 import * as JsErrors from "./internal/mapJsError.ts";
 
@@ -28,6 +36,16 @@ export interface Service {
     | JetStreamError.WrongLastSequenceError
     | JetStreamError.JetStreamApiError
     | NatsError.TimeoutError
+  >;
+  readonly consumer: (
+    stream: string,
+    name?: string | Partial<OrderedConsumerOptions>,
+  ) => Effect.Effect<
+    JsConsumer,
+    | JetStreamError.StreamNotFoundError
+    | JetStreamError.ConsumerNotFoundError
+    | JetStreamError.JetStreamApiError
+    | JetStreamError.JetStreamError
   >;
 }
 
@@ -53,6 +71,29 @@ export type PublishOptions = {
   };
 };
 
+/** @since 0.1.0 @category options */
+export type NextOptions = {
+  readonly expires?: DurationInput;
+};
+
+/** @since 0.1.0 @category options */
+export type FetchOptions = {
+  readonly maxMessages?: number;
+  readonly maxBytes?: number;
+  readonly expires?: DurationInput;
+};
+
+/** @since 0.1.0 @category models */
+export interface JsConsumer {
+  readonly next: (
+    options?: NextOptions,
+  ) => Effect.Effect<Option.Option<JsMessage.JsMessage>, JetStreamError.JetStreamErrors>;
+  readonly fetch: (options?: FetchOptions) => Stream.Stream<JsMessage.JsMessage, JetStreamError.JetStreamErrors>;
+  readonly info: (options?: {
+    readonly cached?: boolean;
+  }) => Effect.Effect<ConsumerInfo, JetStreamError.JetStreamApiError | JetStreamError.JetStreamError>;
+}
+
 /** @since 0.1.0 @category models */
 export class PubAck extends Schema.Class<PubAck>("effect-nats/JetStream/PubAck")({
   stream: Schema.String,
@@ -65,9 +106,12 @@ export class PubAck extends Schema.Class<PubAck>("effect-nats/JetStream/PubAck")
 export class JetStream extends Context.Service<JetStream, Service>()("effect-nats/JetStream") {}
 
 /** @since 0.1.0 @category constructors */
-export const make = (options: JetStreamOptions = {}): Effect.Effect<Service, never, NatsClient.NatsClient> =>
+export const make = (
+  options: JetStreamOptions = {},
+): Effect.Effect<Service, never, NatsClient.NatsClient | JsMessage.JsMessageService> =>
   Effect.gen(function* () {
     const nats = yield* NatsClient.NatsClient;
+    const messages = yield* JsMessage.JsMessageService;
     const client = jetstream(nats.connection, JsOptions.translateOptions(options));
     return JetStream.of({
       client,
@@ -85,9 +129,48 @@ export const make = (options: JetStreamOptions = {}): Effect.Effect<Service, nev
             }),
           ),
         ),
+      consumer: (stream, name) => {
+        const consumerName = Predicate.isString(name) ? name : undefined;
+        return Effect.tryPromise({
+          try: () => client.consumers.get(stream, name),
+          catch: JsErrors.mapConsumerError(
+            Predicate.isUndefined(consumerName) ? { stream } : { stream, consumer: consumerName },
+          ),
+        }).pipe(Effect.map((consumer) => makeConsumer({ consumer, messages })));
+      },
     });
   });
 
+const makeConsumer = (state: { readonly consumer: Consumer; readonly messages: JsMessage.Service }): JsConsumer => ({
+  next: (options = {}) =>
+    Effect.tryPromise({
+      try: () => state.consumer.next(JsOptions.translateNextOptions(options)),
+      catch: JsErrors.mapJetStreamError,
+    }).pipe(Effect.map((message) => Option.fromNullishOr(message).pipe(Option.map(state.messages.fromJsMsg)))),
+  fetch: (options = {}) =>
+    Iterators.streamFromQueuedIterator({
+      acquire: Effect.tryPromise({
+        try: () => state.consumer.fetch(JsOptions.translateFetchOptions(options)),
+        catch: JsErrors.mapJetStreamError,
+      }),
+      transform: state.messages.fromJsMsg,
+      onError: JsErrors.mapJetStreamError,
+      onRelease: closeConsumerMessages,
+    }),
+  info: (options = {}) =>
+    Effect.tryPromise({
+      try: () => state.consumer.info(options.cached),
+      catch: JsErrors.mapJetStreamError,
+    }),
+});
+
+const closeConsumerMessages = (messages: ConsumerMessages): Effect.Effect<void> =>
+  Effect.tryPromise(() => messages.close()).pipe(Effect.asVoid, Effect.ignore);
+
 /** @since 0.1.0 @category layers */
-export const layer = (options: JetStreamOptions = {}): Layer.Layer<JetStream, never, NatsClient.NatsClient> =>
-  Layer.effect(JetStream, make(options));
+export const layer = (
+  options: JetStreamOptions = {},
+): Layer.Layer<JetStream | JsMessage.JsMessageService, never, NatsClient.NatsClient> =>
+  Layer.effect(JetStream, make(options)).pipe(Layer.provideMerge(JsMessage.layer));
+
+export type { ConsumerInfo, OrderedConsumerOptions };

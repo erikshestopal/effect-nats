@@ -1,12 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Equal, Layer, Option } from "effect";
+import { DateTime, Effect, Equal, Layer, Option, Predicate, Schema, Stream } from "effect";
+import { DeliverPolicy } from "@nats-io/jetstream";
 import * as JetStream from "effect-nats/JetStream";
+import * as JsMessage from "effect-nats/JsMessage";
 import * as NatsClient from "effect-nats/NatsClient";
+import * as NatsHeaders from "effect-nats/NatsHeaders";
 import * as NodeConnector from "effect-nats/NodeConnector";
 import * as TestNatsServer from "./utils/TestNatsServer.ts";
-import { withStream } from "./utils/jsFixtures.ts";
+import { withConsumer, withStream } from "./utils/jsFixtures.ts";
 
 const encoder = new TextEncoder();
+const JsonPayload = Schema.Struct({ id: Schema.String });
 
 const clientLayer = (options: NatsClient.Options = {}) =>
   NatsClient.layer(options).pipe(Layer.provide(NodeConnector.layer));
@@ -97,5 +101,255 @@ describe("JetStream", () => {
 
       assert.strictEqual(error._tag, "JetStreamNotEnabledError");
     }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("resolves durable and ordered consumers and maps missing resources", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const result = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE7_CONSUMER", subjects: ["phase7.consumer"] });
+          yield* withConsumer({ stream: "PHASE7_CONSUMER", name: "durable" });
+          const js = yield* JetStream.JetStream;
+          const durable = yield* js.consumer("PHASE7_CONSUMER", "durable");
+          const ordered = yield* js.consumer("PHASE7_CONSUMER", { deliver_policy: DeliverPolicy.All });
+          const durableInfo = yield* durable.info();
+          const orderedInfo = yield* ordered.info();
+          const missingStream = yield* Effect.flip(js.consumer("PHASE7_MISSING", "durable"));
+          const missingConsumer = yield* Effect.flip(js.consumer("PHASE7_CONSUMER", "missing"));
+          return { durableInfo, orderedInfo, missingStream, missingConsumer };
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.strictEqual(result.durableInfo.name, "durable");
+      assert.isObject(result.orderedInfo);
+      assert.isTrue(Predicate.isTagged(result.missingStream, "StreamNotFoundError"));
+      assert.isTrue(Predicate.isTagged(result.missingConsumer, "ConsumerNotFoundError"));
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("next returns JsMessage data and none when the pull expires", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const result = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE7_NEXT", subjects: ["phase7.next"] });
+          yield* withConsumer({ stream: "PHASE7_NEXT", name: "durable" });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase7.next", {
+            payload: encoder.encode('{"id":"one"}'),
+            headers: { "Nats-Test": "present" },
+          });
+          const consumer = yield* js.consumer("PHASE7_NEXT", "durable");
+          const message = yield* consumer.next({ expires: "1 second" }).pipe(Effect.map(Option.getOrThrow));
+          const decoded = yield* message.json(JsonPayload);
+          yield* JsMessage.ack(message);
+          const empty = yield* consumer.next({ expires: "1 second" });
+          return { message, decoded, empty };
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.isTrue(JsMessage.isJsMessage(result.message));
+      assert.strictEqual(result.message.subject, "phase7.next");
+      assert.strictEqual(result.message.text, '{"id":"one"}');
+      assert.strictEqual(Option.getOrThrow(NatsHeaders.get(result.message.headers, "Nats-Test")), "present");
+      assert.deepStrictEqual(result.decoded, { id: "one" });
+      assert.strictEqual(result.message.stream, "PHASE7_NEXT");
+      assert.strictEqual(result.message.consumer, "durable");
+      assert.strictEqual(result.message.seq, 1);
+      assert.strictEqual(result.message.deliveryCount, 1);
+      assert.strictEqual(result.message.redelivered, false);
+      assert.isTrue(DateTime.isUtc(result.message.time));
+      assert.isTrue(Option.isNone(result.empty));
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("ackAck confirms the first ack and suppresses redelivery", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const second = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE7_ACK", subjects: ["phase7.ack"] });
+          yield* withConsumer({ stream: "PHASE7_ACK", name: "durable", ackWaitNanos: 200_000_000 });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase7.ack");
+          const consumer = yield* js.consumer("PHASE7_ACK", "durable");
+          const message = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
+          assert.strictEqual(yield* JsMessage.ackAck(message), true);
+          return yield* consumer.next({ expires: "1 second" });
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.isTrue(Option.isNone(second));
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("nak with delay redelivers after the delay", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const redelivered = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE7_NAK", subjects: ["phase7.nak"] });
+          yield* withConsumer({ stream: "PHASE7_NAK", name: "durable", ackWaitNanos: 5_000_000_000 });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase7.nak");
+          const consumer = yield* js.consumer("PHASE7_NAK", "durable");
+          const first = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
+          yield* JsMessage.nak(first, { delay: "100 millis" });
+          return yield* consumer.next({ expires: "1 second" }).pipe(Effect.map(Option.getOrThrow));
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.strictEqual(redelivered.redelivered, true);
+      assert.strictEqual(redelivered.deliveryCount, 2);
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("term prevents redelivery", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const second = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE7_TERM", subjects: ["phase7.term"] });
+          yield* withConsumer({ stream: "PHASE7_TERM", name: "durable", ackWaitNanos: 200_000_000 });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase7.term");
+          const consumer = yield* js.consumer("PHASE7_TERM", "durable");
+          const first = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
+          yield* JsMessage.term(first, { reason: "done" });
+          return yield* consumer.next({ expires: "1 second" });
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.isTrue(Option.isNone(second));
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.live(
+    "working extends the ack wait",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* TestNatsServer.TestNatsServer;
+        const second = yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* withStream({ name: "PHASE7_WORKING", subjects: ["phase7.working"] });
+            yield* withConsumer({ stream: "PHASE7_WORKING", name: "durable", ackWaitNanos: 200_000_000 });
+            const js = yield* JetStream.JetStream;
+            yield* js.publish("phase7.working");
+            const consumer = yield* js.consumer("PHASE7_WORKING", "durable");
+            const first = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
+            yield* Effect.sleep("100 millis");
+            yield* JsMessage.working(first);
+            yield* Effect.sleep("150 millis");
+            yield* JsMessage.ack(first);
+            return yield* consumer.next({ expires: "1 second" });
+          }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+        );
+
+        assert.isTrue(Option.isNone(second));
+      }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+    { timeout: 10_000 },
+  );
+
+  it.effect("processWith acks success and naks typed failures", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const result = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE7_PROCESS", subjects: ["phase7.process"] });
+          yield* withConsumer({ stream: "PHASE7_PROCESS", name: "durable", ackWaitNanos: 5_000_000_000 });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase7.process", { payload: encoder.encode("success") });
+          yield* js.publish("phase7.process", { payload: encoder.encode("failure") });
+          yield* js.publish("phase7.process", { payload: encoder.encode("failure-now") });
+          const consumer = yield* js.consumer("PHASE7_PROCESS", "durable");
+          const success = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
+          yield* JsMessage.processWith({ handler: () => Effect.void })(success);
+          const failure = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
+          yield* JsMessage.processWith({ handler: () => Effect.fail("bad"), nakDelay: "100 millis" })(failure);
+          const immediate = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
+          yield* JsMessage.processWith({ handler: () => Effect.fail("bad") })(immediate);
+          const redelivery1 = yield* consumer.next({ expires: "1 second" }).pipe(Effect.map(Option.getOrThrow));
+          const redelivery2 = yield* consumer.next({ expires: "1 second" }).pipe(Effect.map(Option.getOrThrow));
+          return [redelivery1, redelivery2];
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.sameMembers(
+        result.map((message) => message.text),
+        ["failure", "failure-now"],
+      );
+      assert.deepStrictEqual(
+        result.map((message) => message.deliveryCount),
+        [2, 2],
+      );
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("ackAck returns false for schema-made messages without an SDK reply", () =>
+    Effect.gen(function* () {
+      const time = yield* DateTime.now;
+      const confirmed = yield* JsMessage.ackAck(
+        JsMessage.JsMessage.make({
+          subject: "phase7.synthetic",
+          payload: encoder.encode("synthetic"),
+          replyTo: Option.none(),
+          headers: NatsHeaders.empty,
+          stream: "PHASE7_SYNTHETIC",
+          consumer: "durable",
+          seq: 1,
+          deliveryCount: 1,
+          redelivered: false,
+          pending: 0,
+          time,
+        }),
+      );
+      assert.strictEqual(confirmed, false);
+    }).pipe(Effect.provide(JsMessage.layer)),
+  );
+
+  it.effect("processWith terms defects without failing", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const second = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE7_DEFECT", subjects: ["phase7.defect"] });
+          yield* withConsumer({ stream: "PHASE7_DEFECT", name: "durable", ackWaitNanos: 200_000_000 });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase7.defect");
+          const consumer = yield* js.consumer("PHASE7_DEFECT", "durable");
+          const message = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
+          yield* JsMessage.processWith({ handler: () => Effect.die("boom") })(message);
+          return yield* consumer.next({ expires: "1 second" });
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.isTrue(Option.isNone(second));
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("fetch yields bounded streams and completes on expiry", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const result = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE7_FETCH", subjects: ["phase7.fetch"] });
+          yield* withConsumer({ stream: "PHASE7_FETCH", name: "durable" });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase7.fetch", { payload: encoder.encode("one") });
+          yield* js.publish("phase7.fetch", { payload: encoder.encode("two") });
+          const consumer = yield* js.consumer("PHASE7_FETCH", "durable");
+          const first = yield* consumer.fetch({ maxMessages: 2, expires: "1 second" }).pipe(Stream.runCollect);
+          const empty = yield* consumer.fetch({ maxMessages: 2, expires: "1 second" }).pipe(Stream.runCollect);
+          return { first, empty };
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.deepStrictEqual(
+        [...result.first].map((message) => message.text),
+        ["one", "two"],
+      );
+      assert.strictEqual(result.empty.length, 0);
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
   );
 });

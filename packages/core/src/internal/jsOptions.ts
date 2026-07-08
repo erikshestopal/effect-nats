@@ -1,5 +1,10 @@
 import { Duration, Predicate } from "effect";
-import type { JetStreamOptions as SdkJetStreamOptions, JetStreamPublishOptions } from "@nats-io/jetstream";
+import type {
+  FetchOptions as SdkFetchOptions,
+  JetStreamOptions as SdkJetStreamOptions,
+  JetStreamPublishOptions,
+  NextOptions as SdkNextOptions,
+} from "@nats-io/jetstream";
 import * as JetStream from "../JetStream.ts";
 import * as NatsHeaders from "../NatsHeaders.ts";
 
@@ -15,4 +20,13 @@ export const translatePublishOptions = (options: JetStream.PublishOptions): Part
   ...(Predicate.isNotUndefined(options.timeout) ? { timeout: Duration.toMillis(options.timeout) } : {}),
   ...(Predicate.isNotUndefined(options.retries) ? { retries: options.retries } : {}),
   ...(Predicate.isNotUndefined(options.expect) ? { expect: options.expect } : {}),
+});
+
+export const translateNextOptions = (options: JetStream.NextOptions): SdkNextOptions =>
+  Predicate.isNotUndefined(options.expires) ? { expires: Duration.toMillis(options.expires) } : {};
+
+export const translateFetchOptions = (options: JetStream.FetchOptions): SdkFetchOptions => ({
+  ...(Predicate.isNotUndefined(options.maxMessages) ? { max_messages: options.maxMessages } : {}),
+  ...(Predicate.isNotUndefined(options.maxBytes) ? { max_bytes: options.maxBytes } : {}),
+  ...(Predicate.isNotUndefined(options.expires) ? { expires: Duration.toMillis(options.expires) } : {}),
 });
