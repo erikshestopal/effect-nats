@@ -21,7 +21,7 @@ export default defineConfig({
         command: "vp check --fix",
       },
       "check:ast-grep": {
-        command: "sg scan packages examples",
+        command: "sg scan src test examples",
       },
       "check:test": {
         command: "bunx --bun vp test run",
@@ -36,12 +36,12 @@ export default defineConfig({
   },
   test: {
     passWithNoTests: true,
-    include: ["packages/*/test/**/*.test.ts"],
+    include: ["test/**/*.test.ts"],
     exclude: ["node_modules", "dist", "repos", "docs"],
     coverage: {
       provider: "v8",
-      include: ["packages/*/src/**"],
-      exclude: ["packages/*/src/index.ts", "packages/*/test/**"],
+      include: ["src/**"],
+      exclude: ["src/index.ts", "test/**"],
       thresholds: {
         lines: 100,
         functions: 100,
@@ -67,13 +67,13 @@ export default defineConfig({
     categories: {},
     overrides: [
       {
-        files: ["packages/*/test/**/*.ts"],
+        files: ["test/**/*.ts"],
         rules: {
           "no-unused-vars": "off",
         },
       },
       {
-        files: ["packages/*/test/**", "lint/**"],
+        files: ["test/**", "lint/**"],
         rules: {
           "agent/max-positional-params": "off",
         },

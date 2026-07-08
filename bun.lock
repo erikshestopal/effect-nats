@@ -5,6 +5,12 @@
     "": {
       "name": "effect-nats",
       "dependencies": {
+        "@nats-io/jetstream": "3.4.0",
+        "@nats-io/kv": "3.4.0",
+        "@nats-io/nats-core": "3.4.0",
+        "@nats-io/obj": "3.4.0",
+        "@nats-io/services": "3.4.0",
+        "@nats-io/transport-node": "3.4.0",
         "effect": "4.0.0-beta.93",
       },
       "devDependencies": {
@@ -20,19 +26,6 @@
         "typescript": "^7.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@0.2.3",
         "vite-plus": "0.2.3",
-      },
-    },
-    "packages/core": {
-      "name": "effect-nats",
-      "version": "0.0.0",
-      "dependencies": {
-        "@nats-io/jetstream": "3.4.0",
-        "@nats-io/kv": "3.4.0",
-        "@nats-io/nats-core": "3.4.0",
-        "@nats-io/obj": "3.4.0",
-        "@nats-io/services": "3.4.0",
-        "@nats-io/transport-node": "3.4.0",
-        "effect": "4.0.0-beta.93",
       },
       "peerDependencies": {
         "effect": ">=4.0.0-beta.93",
@@ -449,8 +442,6 @@
     "dom-accessibility-api": ["dom-accessibility-api@0.5.16", "", {}, "sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg=="],
 
     "effect": ["effect@4.0.0-beta.93", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.8.0", "find-my-way-ts": "^0.1.6", "ini": "^7.0.0", "kubernetes-types": "^1.30.0", "msgpackr": "^2.0.1", "multipasta": "^0.2.7", "toml": "^4.1.1", "uuid": "^14.0.0", "yaml": "^2.9.0" } }, "sha512-wNS5MKFa3C42uBfIDik2oJ78lhpoYz2hN4oBR0229BeeDCIrkg/FiOvoiPGdCVlWa7MEKxEL5I0f8AILVHSD9A=="],
-
-    "effect-nats": ["effect-nats@workspace:packages/core"],
 
     "es-module-lexer": ["es-module-lexer@2.3.0", "", {}, "sha512-KLdwQm2NvGLDkQDCGvmiQrhkd0JbMzXthwQAUgWjQuQdBLFa3eiBP5arXZyA+f8x+x7OXgud6bq2rxjGtHV2tw=="],
 

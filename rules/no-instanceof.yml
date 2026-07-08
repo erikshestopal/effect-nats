@@ -3,8 +3,8 @@ language: TypeScript
 severity: error
 message: Use Effect predicates, SchemaParser.is(...), or a domain predicate instead of instanceof checks.
 files:
-  - packages/*/src/**/*.ts
-  - packages/*/test/**/*.ts
+  - src/**/*.ts
+  - test/**/*.ts
 rule:
   any:
     - pattern: $VALUE instanceof $CLASS

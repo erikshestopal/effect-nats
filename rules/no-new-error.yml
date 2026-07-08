@@ -3,6 +3,6 @@ language: TypeScript
 severity: error
 message: Return typed Effect errors instead of constructing generic Error instances.
 files:
-  - packages/*/src/**/*.ts
+  - src/**/*.ts
 rule:
   pattern: new Error($$$ARGS)

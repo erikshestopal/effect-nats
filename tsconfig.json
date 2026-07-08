@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "paths": {
-      "effect-nats": ["./packages/core/src/index.ts"],
-      "effect-nats/*": ["./packages/core/src/*.ts"]
+      "effect-nats": ["./src/index.ts"],
+      "effect-nats/*": ["./src/*.ts"]
     },
     "lib": ["ESNext", "DOM"],
     "types": ["bun", "node"],
@@ -32,7 +32,7 @@
         "name": "@effect/language-service",
         "overrides": [
           {
-            "include": ["packages/*/test/**/*", "./packages/*/test/**/*"],
+            "include": ["test/**/*", "./test/**/*"],
             "options": {}
           }
         ],
@@ -62,7 +62,7 @@
       }
     ]
   },
-  "include": ["packages/*/src/**/*", "packages/*/test/**/*", "examples/**/*.ts"],
+  "include": ["src/**/*", "test/**/*", "examples/**/*.ts"],
   "exclude": ["node_modules", "dist", "repos", "docs"],
   "$schema": "https://raw.githubusercontent.com/Effect-TS/tsgo/refs/heads/main/schema.json"
 }

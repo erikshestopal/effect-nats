@@ -3,7 +3,7 @@ language: TypeScript
 severity: error
 message: "Use Effect.succeedNone / Effect.succeedSome(value) instead of Effect.succeed(Option.none()) / Effect.succeed(Option.some(value))."
 files:
-  - packages/*/src/**/*.ts
+  - src/**/*.ts
 rule:
   any:
     - pattern: Effect.succeed(Option.none())

@@ -3,6 +3,6 @@ language: TypeScript
 severity: error
 message: Use effect Array helpers such as Arr.isArray instead of native Array.isArray in src.
 files:
-  - packages/*/src/**/*.ts
+  - src/**/*.ts
 rule:
   pattern: Array.isArray($$$ARGS)

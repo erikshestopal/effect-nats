@@ -3,10 +3,19 @@
   "name": "effect-nats",
   "version": "0.0.0",
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
   "type": "module",
+  "sideEffects": [],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./*": {
+      "types": "./src/*.ts",
+      "import": "./src/*.ts"
+    }
+  },
   "scripts": {
     "check": "vp run --log labeled check:all",
     "typecheck": "tsgo --noEmit",
@@ -15,6 +24,12 @@
     "knip": "knip"
   },
   "dependencies": {
+    "@nats-io/jetstream": "3.4.0",
+    "@nats-io/kv": "3.4.0",
+    "@nats-io/nats-core": "3.4.0",
+    "@nats-io/obj": "3.4.0",
+    "@nats-io/services": "3.4.0",
+    "@nats-io/transport-node": "3.4.0",
     "effect": "4.0.0-beta.93"
   },
   "devDependencies": {
@@ -31,6 +46,9 @@
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.3",
     "vite-plus": "0.2.3"
   },
+  "peerDependencies": {
+    "effect": ">=4.0.0-beta.93"
+  },
   "overrides": {
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.3"
   },
@@ -42,8 +60,8 @@
         "overrides": [
           {
             "include": [
-              "packages/*/test/**/*",
-              "./packages/*/test/**/*"
+              "test/**/*",
+              "./test/**/*"
             ],
             "options": {
               "diagnostics": false

@@ -3,8 +3,8 @@ language: TypeScript
 severity: error
 message: Construct tagged values with Schema classes or named constructors instead of manual object literals with _tag.
 files:
-  - packages/*/src/**/*.ts
-  - packages/*/test/**/*.ts
+  - src/**/*.ts
+  - test/**/*.ts
 rule:
   all:
     - kind: pair

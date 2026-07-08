@@ -3,7 +3,7 @@ language: TypeScript
 severity: error
 message: Use effect Array helpers such as Arr.findFirst, Arr.filter, Arr.map, Arr.some, Arr.contains, Arr.sort, or Arr.reduce instead of native array methods in src.
 files:
-  - packages/*/src/**/*.ts
+  - src/**/*.ts
 rule:
   all:
     - any:

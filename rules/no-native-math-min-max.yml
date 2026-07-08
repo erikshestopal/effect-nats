@@ -3,7 +3,7 @@ language: TypeScript
 severity: error
 message: Use effect Number helpers such as Num.min or Num.max instead of Math.min or Math.max in src.
 files:
-  - packages/*/src/**/*.ts
+  - src/**/*.ts
 rule:
   any:
     - pattern: Math.min($$$ARGS)

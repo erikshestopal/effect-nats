@@ -3,7 +3,7 @@ language: TypeScript
 severity: error
 message: Use Predicate.isString() / Predicate.isNotString() from effect instead of typeof string checks.
 files:
-  - packages/*/src/**/*.ts
+  - src/**/*.ts
 rule:
   any:
     - pattern: 'typeof $VALUE === "string"'
