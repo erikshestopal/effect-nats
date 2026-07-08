@@ -10,7 +10,9 @@
   "scripts": {
     "check": "vp run --log labeled check:all",
     "typecheck": "tsgo --noEmit",
-    "prepare": "vp config && effect-tsgo patch"
+    "example": "bun",
+    "prepare": "vp config && effect-tsgo patch",
+    "knip": "knip"
   },
   "dependencies": {
     "effect": "4.0.0-beta.93"
@@ -20,11 +22,12 @@
     "@effect/tsgo": "0.16.1",
     "@effect/vitest": "4.0.0-beta.93",
     "@types/bun": "1.3.14",
-    "@types/node": "^26.1.0",
+    "@types/node": "^26.1.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.9",
     "expect-type": "1.4.0",
-    "typescript": "7.0.1-rc",
+    "knip": "^6.25.0",
+    "typescript": "^7.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.3",
     "vite-plus": "0.2.3"
   },

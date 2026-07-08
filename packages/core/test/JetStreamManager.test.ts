@@ -1,6 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Effect, Layer, Option, Predicate, Stream } from "effect";
-import { AckPolicy, DeliverPolicy } from "@nats-io/jetstream";
 import * as JetStream from "effect-nats/JetStream";
 import * as JetStreamManager from "effect-nats/JetStreamManager";
 import * as NatsClient from "effect-nats/NatsClient";
@@ -64,8 +63,8 @@ describe("JetStreamManager", () => {
           yield* manager.streams.add({ name: "PHASE9_CONSUMER", subjects: ["phase9.consumer"] });
           const added = yield* manager.consumers.add("PHASE9_CONSUMER", {
             durable_name: "durable",
-            ack_policy: AckPolicy.Explicit,
-            deliver_policy: DeliverPolicy.All,
+            ack_policy: JetStreamManager.AckPolicy.Explicit,
+            deliver_policy: JetStreamManager.DeliverPolicy.All,
             ack_wait: "2 seconds",
           });
           const info = yield* manager.consumers.info("PHASE9_CONSUMER", "durable");
@@ -96,8 +95,8 @@ describe("JetStreamManager", () => {
             yield* manager.streams.add({ name: `PHASE9_LIST_${index}`, subjects: [`phase9.list.${index}`] });
             yield* manager.consumers.add(`PHASE9_LIST_${index}`, {
               durable_name: "durable",
-              ack_policy: AckPolicy.Explicit,
-              deliver_policy: DeliverPolicy.All,
+              ack_policy: JetStreamManager.AckPolicy.Explicit,
+              deliver_policy: JetStreamManager.DeliverPolicy.All,
             });
           }
           const streamNames = yield* manager.streams.names("phase9.list.*").pipe(Stream.runCollect);
@@ -153,8 +152,8 @@ describe("JetStreamManager", () => {
             yield* manager.streams.add({ name: "PHASE9_PAUSE", subjects: ["phase9.pause"] });
             yield* manager.consumers.add("PHASE9_PAUSE", {
               durable_name: "durable",
-              ack_policy: AckPolicy.Explicit,
-              deliver_policy: DeliverPolicy.All,
+              ack_policy: JetStreamManager.AckPolicy.Explicit,
+              deliver_policy: JetStreamManager.DeliverPolicy.All,
             });
             const until = DateTime.add(yield* DateTime.now, { minutes: 5 });
             const paused = yield* manager.consumers.pause("PHASE9_PAUSE", "durable", { until });

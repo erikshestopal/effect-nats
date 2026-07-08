@@ -7,18 +7,13 @@ import { Context, DateTime, Effect, Iterable, Layer, Option, Stream } from "effe
 import { jetstreamManager } from "@nats-io/jetstream";
 import type { Input as DurationInput } from "effect/Duration";
 import type {
-  AckPolicy,
   ConsumerConfig,
   ConsumerInfo,
   ConsumerUpdateConfig,
-  DeliverPolicy,
   JetStreamManager as SdkJetStreamManager,
   Lister,
   PurgeOpts,
   PurgeResponse,
-  ReplayPolicy,
-  RetentionPolicy,
-  StorageType,
   StreamConfig,
   StreamInfo,
   StreamUpdateConfig,
@@ -210,4 +205,5 @@ export const layer = (
   NatsClient.NatsClient
 > => Layer.effect(JetStreamManager, make(options));
 
-export type { AckPolicy, ConsumerInfo, DeliverPolicy, ReplayPolicy, RetentionPolicy, StorageType, StreamInfo };
+export { AckPolicy, DeliverPolicy, ReplayPolicy, RetentionPolicy, StorageType } from "@nats-io/jetstream";
+export type { ConsumerInfo, StreamInfo };

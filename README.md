@@ -4,7 +4,7 @@ Effect-native wrappers for the NATS JavaScript SDK. The package keeps the upstre
 
 See the full design contract in [`docs/DESIGN.html`](docs/DESIGN.html).
 
-The snippets below are mirrored as typechecked programs in [`examples/`](examples/).
+Runnable, Effect-first programs live in [`examples/`](examples/) (see [`examples/README.md`](examples/README.md) for how to run them against a local `nats-server`). The snippets below are the short form of those scenarios.
 
 ## Quickstart
 
