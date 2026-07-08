@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { DateTime, Effect, Equal, Layer, Option, Predicate, Schema, Stream } from "effect";
+import { DateTime, Effect, Equal, Layer, Option, Predicate, Ref, Schema, Stream } from "effect";
 import { DeliverPolicy } from "@nats-io/jetstream";
 import * as JetStream from "effect-nats/JetStream";
 import * as JsMessage from "effect-nats/JsMessage";
@@ -358,6 +358,96 @@ describe("JetStream", () => {
         ["one", "two"],
       );
       assert.strictEqual(result.empty.length, 0);
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("consume continuously refills pulls and lets processWith ack messages", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const result = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE8_CONSUME", subjects: ["phase8.consume"] });
+          yield* withConsumer({ stream: "PHASE8_CONSUME", name: "durable" });
+          const js = yield* JetStream.JetStream;
+          for (let index = 0; index < 50; index++) {
+            yield* js.publish("phase8.consume", { payload: encoder.encode(String(index)) });
+          }
+          const notifications = yield* Ref.make(0);
+          const messages = yield* JsMessage.JsMessageService;
+          const consumer = yield* js.consumer("PHASE8_CONSUME", "durable");
+          const consumed = yield* consumer
+            .consume({
+              maxMessages: 10,
+              onNotification: () => Ref.update(notifications, (count) => count + 1),
+            })
+            .pipe(Stream.tap(messages.processWith({ handler: () => Effect.void })), Stream.take(50), Stream.runCollect);
+          const after = yield* consumer.next({ expires: "1 second" });
+          const notificationCount = yield* Ref.get(notifications);
+          return { consumed, after, notificationCount };
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.deepStrictEqual(
+        [...result.consumed].map((message) => message.text),
+        Array.from({ length: 50 }, (_value, index) => String(index)),
+      );
+      assert.isTrue(Option.isNone(result.after));
+      assert.isAbove(result.notificationCount, 0);
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("consume ignores notification handler failures", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const texts = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE8_NOTIFY", subjects: ["phase8.notify"] });
+          yield* withConsumer({ stream: "PHASE8_NOTIFY", name: "durable" });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase8.notify", { payload: encoder.encode("one") });
+          yield* js.publish("phase8.notify", { payload: encoder.encode("two") });
+          const messages = yield* JsMessage.JsMessageService;
+          const consumer = yield* js.consumer("PHASE8_NOTIFY", "durable");
+          return yield* consumer
+            .consume({
+              maxMessages: 1,
+              onNotification: () => Effect.die("ignored"),
+            })
+            .pipe(
+              Stream.tap(messages.processWith({ handler: () => Effect.void })),
+              Stream.take(2),
+              Stream.map((message) => message.text),
+              Stream.runCollect,
+            );
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.deepStrictEqual([...texts], ["one", "two"]);
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("consume works without a notification handler", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const text = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE8_PLAIN", subjects: ["phase8.plain"] });
+          yield* withConsumer({ stream: "PHASE8_PLAIN", name: "durable" });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase8.plain", { payload: encoder.encode("plain") });
+          const messages = yield* JsMessage.JsMessageService;
+          const consumer = yield* js.consumer("PHASE8_PLAIN", "durable");
+          return yield* consumer.consume({ maxMessages: 1 }).pipe(
+            Stream.tap(messages.processWith({ handler: () => Effect.void })),
+            Stream.take(1),
+            Stream.runHead,
+            Effect.map(Option.getOrThrow),
+            Effect.map((message) => message.text),
+          );
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.strictEqual(text, "plain");
     }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
   );
 });

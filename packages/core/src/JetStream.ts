@@ -10,6 +10,7 @@ import type {
   Consumer,
   ConsumerInfo,
   ConsumerMessages,
+  ConsumerNotification,
   JetStreamClient,
   OrderedConsumerOptions,
 } from "@nats-io/jetstream";
@@ -83,12 +84,24 @@ export type FetchOptions = {
   readonly expires?: DurationInput;
 };
 
+/** @since 0.1.0 @category options */
+export type ConsumeOptions = {
+  readonly maxMessages?: number;
+  readonly maxBytes?: number;
+  readonly thresholdMessages?: number;
+  readonly thresholdBytes?: number;
+  readonly abortOnMissingResource?: boolean;
+  readonly bind?: boolean;
+  readonly onNotification?: (notification: ConsumerNotification) => Effect.Effect<unknown>;
+};
+
 /** @since 0.1.0 @category models */
 export interface JsConsumer {
   readonly next: (
     options?: NextOptions,
   ) => Effect.Effect<Option.Option<JsMessage.JsMessage>, JetStreamError.JetStreamErrors>;
   readonly fetch: (options?: FetchOptions) => Stream.Stream<JsMessage.JsMessage, JetStreamError.JetStreamErrors>;
+  readonly consume: (options?: ConsumeOptions) => Stream.Stream<JsMessage.JsMessage, JetStreamError.JetStreamErrors>;
   readonly info: (options?: {
     readonly cached?: boolean;
   }) => Effect.Effect<ConsumerInfo, JetStreamError.JetStreamApiError | JetStreamError.JetStreamError>;
@@ -157,6 +170,34 @@ const makeConsumer = (state: { readonly consumer: Consumer; readonly messages: J
       onError: JsErrors.mapJetStreamError,
       onRelease: closeConsumerMessages,
     }),
+  consume: (options = {}) =>
+    Iterators.streamFromQueuedIterator({
+      acquire: Effect.gen(function* () {
+        const consumerMessages = yield* Effect.tryPromise({
+          try: () => state.consumer.consume(JsOptions.translateConsumeOptions(options)),
+          catch: JsErrors.mapJetStreamError,
+        });
+        if (Predicate.isNotUndefined(options.onNotification)) {
+          const onNotification = options.onNotification;
+          yield* Stream.fromAsyncIterable(consumerMessages.status(), JsErrors.mapJetStreamError).pipe(
+            Stream.mapEffect((notification) =>
+              onNotification(notification).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cause) => Effect.logWarning(cause),
+                  onSuccess: () => Effect.void,
+                }),
+              ),
+            ),
+            Stream.runDrain,
+            Effect.forkScoped({ startImmediately: true }),
+          );
+        }
+        return consumerMessages;
+      }),
+      transform: state.messages.fromJsMsg,
+      onError: JsErrors.mapJetStreamError,
+      onRelease: closeConsumerMessages,
+    }),
   info: (options = {}) =>
     Effect.tryPromise({
       try: () => state.consumer.info(options.cached),
@@ -173,4 +214,4 @@ export const layer = (
 ): Layer.Layer<JetStream | JsMessage.JsMessageService, never, NatsClient.NatsClient> =>
   Layer.effect(JetStream, make(options)).pipe(Layer.provideMerge(JsMessage.layer));
 
-export type { ConsumerInfo, OrderedConsumerOptions };
+export type { ConsumerInfo, ConsumerNotification, OrderedConsumerOptions };

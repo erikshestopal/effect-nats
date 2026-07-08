@@ -1,5 +1,6 @@
 import { Duration, Predicate } from "effect";
 import type {
+  ConsumeOptions as SdkConsumeOptions,
   FetchOptions as SdkFetchOptions,
   JetStreamOptions as SdkJetStreamOptions,
   JetStreamPublishOptions,
@@ -29,4 +30,15 @@ export const translateFetchOptions = (options: JetStream.FetchOptions): SdkFetch
   ...(Predicate.isNotUndefined(options.maxMessages) ? { max_messages: options.maxMessages } : {}),
   ...(Predicate.isNotUndefined(options.maxBytes) ? { max_bytes: options.maxBytes } : {}),
   ...(Predicate.isNotUndefined(options.expires) ? { expires: Duration.toMillis(options.expires) } : {}),
+});
+
+export const translateConsumeOptions = (options: JetStream.ConsumeOptions): SdkConsumeOptions => ({
+  ...(Predicate.isNotUndefined(options.maxMessages) ? { max_messages: options.maxMessages } : {}),
+  ...(Predicate.isNotUndefined(options.maxBytes) ? { max_bytes: options.maxBytes } : {}),
+  ...(Predicate.isNotUndefined(options.thresholdMessages) ? { threshold_messages: options.thresholdMessages } : {}),
+  ...(Predicate.isNotUndefined(options.thresholdBytes) ? { threshold_bytes: options.thresholdBytes } : {}),
+  ...(Predicate.isNotUndefined(options.abortOnMissingResource)
+    ? { abort_on_missing_resource: options.abortOnMissingResource }
+    : {}),
+  ...(Predicate.isNotUndefined(options.bind) ? { bind: options.bind } : {}),
 });
