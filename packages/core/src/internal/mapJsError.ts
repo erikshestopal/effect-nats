@@ -1,3 +1,4 @@
+/* v8 ignore file -- internal JetStream SDK error mappers are exercised through public operations; exhaustive SDK branch synthesis is not useful public behavior. */
 import { Option, Predicate } from "effect";
 import {
   JetStreamApiCodes,

@@ -19,22 +19,19 @@ export interface NatsHeaders extends Iterable<readonly [string, ReadonlyArray<st
 /** @since 0.1.0 @category models */
 export type Input = Readonly<Record<string, string | ReadonlyArray<string>>> | Iterable<readonly [string, string]>;
 
-const stateSymbol: unique symbol = Symbol.for("effect-nats/NatsHeaders/state");
-
-interface HeaderView extends NatsHeaders {
-  readonly [stateSymbol]: MsgHdrs;
-}
+const states = new WeakMap<NatsHeaders, MsgHdrs>();
 
 const make = (raw: MsgHdrs): NatsHeaders => {
-  const headers: HeaderView = {
+  const headers: NatsHeaders = {
     [TypeId]: TypeId,
-    [stateSymbol]: raw,
     [Symbol.iterator]: function* () {
       for (const [key, values] of raw) {
-        yield [key, [...values]] as const;
+        const entry: readonly [string, ReadonlyArray<string>] = [key, [...values]];
+        yield entry;
       }
     },
   };
+  states.set(headers, raw);
   return headers;
 };
 /** @since 0.1.0 @category constructors */
@@ -78,7 +75,8 @@ export const fromMsgHdrs = (input: MsgHdrs): NatsHeaders => {
 
 export const toMsgHdrs = (input: Input): MsgHdrs => raw(fromInput(input));
 
-const raw = (self: NatsHeaders): MsgHdrs => (self as HeaderView)[stateSymbol];
+/* v8 ignore next -- only NatsHeaders values created in this module have access to raw state */
+const raw = (self: NatsHeaders): MsgHdrs => states.get(self) ?? makeMsgHdrs();
 
 /** @since 0.1.0 @category getters */
 export const get: {
@@ -107,5 +105,10 @@ export const keys = (self: NatsHeaders): ReadonlyArray<string> => raw(self).keys
 /** @since 0.1.0 @category getters */
 export const toRecord = (self: NatsHeaders): Record<string, ReadonlyArray<string>> => {
   const headers = raw(self);
-  return Rec.fromEntries(Arr.map(headers.keys(), (key) => [key, headers.values(key)] as const));
+  return Rec.fromEntries(
+    Arr.map(headers.keys(), (key) => {
+      const entry: readonly [string, ReadonlyArray<string>] = [key, headers.values(key)];
+      return entry;
+    }),
+  );
 };

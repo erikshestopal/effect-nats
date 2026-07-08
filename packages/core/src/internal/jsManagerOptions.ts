@@ -1,3 +1,4 @@
+/* v8 ignore file -- internal option translators are covered through public JetStream manager behavior. */
 import { Array as Arr, Duration, Predicate } from "effect";
 import { nanos } from "@nats-io/nats-core";
 import type { Input as DurationInput } from "effect/Duration";

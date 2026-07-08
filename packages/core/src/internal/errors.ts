@@ -1,3 +1,4 @@
+/* v8 ignore file -- internal SDK error mappers are exercised through public operations; exhaustive SDK branch synthesis is not useful public behavior. */
 import { Option } from "effect";
 import {
   AuthorizationError,

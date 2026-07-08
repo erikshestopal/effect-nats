@@ -14,7 +14,7 @@ export default defineConfig({
     tasks: {
       "check:all": {
         command: "echo Checks passed",
-        dependsOn: ["check:lint", "check:ast-grep", "check:test", "check:typecheck"],
+        dependsOn: ["check:lint", "check:ast-grep", "check:coverage", "check:typecheck"],
         cache: false,
       },
       "check:lint": {
@@ -27,7 +27,7 @@ export default defineConfig({
         command: "bunx --bun vp test run",
       },
       "check:coverage": {
-        command: "bunx --bun vp test run --coverage",
+        command: "bunx vp test run --coverage",
       },
       "check:typecheck": {
         command: "tsgo --noEmit",
@@ -41,7 +41,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["packages/*/src/**"],
-      exclude: ["packages/*/src/internal/**", "packages/*/src/index.ts", "packages/*/test/**"],
+      exclude: ["packages/*/src/index.ts", "packages/*/test/**"],
       thresholds: {
         lines: 100,
         functions: 100,

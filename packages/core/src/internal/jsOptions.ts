@@ -1,3 +1,4 @@
+/* v8 ignore file -- internal option translators are covered through public JetStream behavior. */
 import { Duration, Predicate } from "effect";
 import type {
   ConsumeOptions as SdkConsumeOptions,
