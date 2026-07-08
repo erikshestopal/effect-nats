@@ -5,6 +5,7 @@
       "effect-nats/*": ["./packages/core/src/*.ts"]
     },
     "lib": ["ESNext", "DOM"],
+    "types": ["bun", "node"],
     "target": "ESNext",
     "module": "Preserve",
     "moduleDetection": "force",

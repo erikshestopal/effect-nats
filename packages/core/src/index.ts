@@ -3,6 +3,9 @@
  *
  * @since 0.1.0
  */
+export * as NatsClient from "./NatsClient.ts";
+export * as NatsConnector from "./NatsConnector.ts";
 export * as NatsError from "./NatsError.ts";
 export * as NatsHeaders from "./NatsHeaders.ts";
 export * as NatsMessage from "./NatsMessage.ts";
+export * as NodeConnector from "./NodeConnector.ts";

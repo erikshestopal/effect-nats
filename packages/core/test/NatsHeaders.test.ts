@@ -35,4 +35,8 @@ describe("NatsHeaders", () => {
   it("empty iterates to nothing", () => {
     assert.deepStrictEqual(Array.from(NatsHeaders.empty), []);
   });
+
+  it("defaults absent input to empty headers", () => {
+    assert.deepStrictEqual(Array.from(NatsHeaders.fromInput()), []);
+  });
 });

@@ -62,4 +62,19 @@ describe("NatsMessage", () => {
       assert.strictEqual(decoded.subject, "orders.created");
     }),
   );
+
+  it.effect("fails respond without a reply subject", () =>
+    Effect.gen(function* () {
+      const message = NatsMessage.NatsMessage.make({
+        subject: "orders.created",
+        payload: encoder.encode("hello"),
+        replyTo: Option.none(),
+        headers: NatsHeaders.empty,
+      });
+
+      const error = yield* Effect.flip(NatsMessage.respond(message));
+      assert.strictEqual(error._tag, "NoReplySubjectError");
+      assert.strictEqual(error.subject, "orders.created");
+    }),
+  );
 });
