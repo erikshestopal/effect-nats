@@ -3,7 +3,7 @@
  *
  * Run: `bun examples/queue-group.ts`
  */
-import { Array as Arr, Console, Effect, Fiber, Number as Num, Ref, Stream } from "effect";
+import { Array as Arr, Console, Effect, Number as Num, Ref, Stream } from "effect";
 import * as NatsClient from "effect-nats/NatsClient";
 import { encoder, NatsLive, runMain } from "./_shared.ts";
 
@@ -12,29 +12,30 @@ const program = Effect.gen(function* () {
   const workerA = yield* Ref.make(0);
   const workerB = yield* Ref.make(0);
 
-  const runWorker = (options: { readonly name: "A" | "B"; readonly counter: Ref.Ref<number> }) =>
-    nats.subscribe("jobs.echo", { queue: "workers" }).pipe(
-      Stream.take(4),
-      Stream.mapEffect((message) =>
-        Ref.update(options.counter, Num.increment).pipe(
-          Effect.andThen(Console.log(`worker ${options.name} got`, message.text)),
+  const worker = (options: { readonly name: "A" | "B"; readonly counter: Ref.Ref<number> }) =>
+    nats
+      .subscribe("jobs.echo", { queue: "workers" })
+      .pipe(
+        Stream.mapEffect((message) =>
+          Ref.update(options.counter, Num.increment).pipe(
+            Effect.andThen(Console.log(`worker ${options.name} got`, message.text)),
+          ),
         ),
-      ),
-      Stream.runDrain,
-      Effect.forkScoped({ startImmediately: true }),
-    );
+      );
 
-  const fiberA = yield* runWorker({ name: "A", counter: workerA });
-  const fiberB = yield* runWorker({ name: "B", counter: workerB });
+  const collect = worker({ name: "A", counter: workerA }).pipe(
+    Stream.merge(worker({ name: "B", counter: workerB })),
+    Stream.take(4),
+    Stream.runDrain,
+  );
 
   // Four messages into one queue group — each is delivered to exactly one worker.
-  yield* Effect.forEach(
+  const publish = Effect.forEach(
     Arr.makeBy(4, (index) => String(index)),
     (payload) => nats.publish("jobs.echo", { payload: encoder.encode(payload) }),
   );
 
-  yield* Fiber.join(fiberA);
-  yield* Fiber.join(fiberB);
+  yield* Effect.all([collect, Effect.yieldNow.pipe(Effect.andThen(publish))], { concurrency: "unbounded" });
 
   const counts = {
     A: yield* Ref.get(workerA),

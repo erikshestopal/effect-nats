@@ -17,7 +17,6 @@ const durable = "puller";
 const program = Effect.gen(function* () {
   const manager = yield* JetStreamManager.JetStreamManager;
   const js = yield* JetStream.JetStream;
-  const messages = yield* JsMessage.JsMessageService;
 
   yield* manager.streams.delete(stream).pipe(Effect.ignore);
   yield* manager.streams.add({ name: stream, subjects: [subject] });
@@ -36,17 +35,17 @@ const program = Effect.gen(function* () {
   // next: one message or none when the pull expires.
   const one = yield* consumer.next({ expires: "2 seconds" });
   if (Option.isSome(one)) {
-    yield* messages.ack(one.value);
+    yield* JsMessage.ack(one.value);
   }
 
   // fetch: bounded batch iterator as a Stream.
   const batch = yield* consumer.fetch({ maxMessages: 4, expires: "2 seconds" }).pipe(
-    Stream.mapEffect((message) => messages.ack(message).pipe(Effect.as(message.text))),
+    Stream.mapEffect((message) => JsMessage.ack(message).pipe(Effect.as(message.text))),
     Stream.runCollect,
   );
 
   // Empty pull after draining.
-  const empty = yield* consumer.next({ expires: "500 millis" });
+  const empty = yield* consumer.next({ expires: "1 second" });
 
   yield* manager.streams.delete(stream).pipe(Effect.ignore);
 
