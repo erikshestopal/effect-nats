@@ -9,7 +9,6 @@ import type { ConnectionOptions, NatsConnection } from "@nats-io/nats-core";
 import * as NatsError from "./NatsError.ts";
 import * as Connect from "./internal/connect.ts";
 
-/** @since 0.1.0 @category models */
 export interface Connector {
   readonly connect: (
     options: ConnectionOptions,

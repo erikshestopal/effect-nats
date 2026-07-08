@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { expectTypeOf } from "expect-type";
-import { Clock, Context, Effect, Exit, Fiber, Layer, Option, Scope, Stream } from "effect";
+import { Array as Arr, Clock, Context, Effect, Exit, Fiber, Layer, Option, Scope, Stream } from "effect";
 import * as NatsClient from "effect-nats/NatsClient";
 import * as NatsError from "effect-nats/NatsError";
 import * as NatsHeaders from "effect-nats/NatsHeaders";
@@ -160,7 +160,7 @@ describe("NatsMicro", () => {
           yield* NatsClient.NatsClient.pipe(Effect.flatMap((nats) => nats.flush));
           const start = yield* Clock.currentTimeMillis;
           const fibers = yield* Effect.forEach(
-            Array.from({ length: 8 }, () => requestText("slow")),
+            Arr.makeBy(8, () => requestText("slow")),
             (effect) => Effect.forkChild(effect, { startImmediately: true }),
           );
           yield* Effect.forEach(fibers, Fiber.join);
@@ -231,7 +231,7 @@ describe("NatsMicro", () => {
       const server = yield* TestNatsServer.TestNatsServer;
       const responses = yield* Effect.scoped(
         Effect.forEach(
-          Array.from({ length: 8 }, () => requestText("shared")),
+          Arr.makeBy(8, () => requestText("shared")),
           (effect) => effect,
         ).pipe(
           Effect.provide(

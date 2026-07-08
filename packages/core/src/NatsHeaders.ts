@@ -3,7 +3,7 @@
  *
  * @since 0.1.0
  */
-import { Array as Arr, Option, Predicate, Record as Rec, Schema } from "effect";
+import { Array as Arr, Option, Predicate, Record as Rec, Schema, String as Str } from "effect";
 import { dual } from "effect/Function";
 import { headers as makeMsgHdrs } from "@nats-io/nats-core";
 import type { MsgHdrs } from "@nats-io/nats-core";
@@ -11,12 +11,10 @@ import type { MsgHdrs } from "@nats-io/nats-core";
 /** @since 0.1.0 @category type IDs */
 export const TypeId = "~effect-nats/NatsHeaders" as const;
 
-/** @since 0.1.0 @category models */
 export interface NatsHeaders extends Iterable<readonly [string, ReadonlyArray<string>]> {
   readonly [TypeId]: typeof TypeId;
 }
 
-/** @since 0.1.0 @category models */
 export type Input = Readonly<Record<string, string | ReadonlyArray<string>>> | Iterable<readonly [string, string]>;
 
 const states = new WeakMap<NatsHeaders, MsgHdrs>();
@@ -87,10 +85,7 @@ export const get: {
 } = dual<
   (key: string) => (self: NatsHeaders) => Option.Option<string>,
   (self: NatsHeaders, key: string) => Option.Option<string>
->(2, (self, key) => {
-  const value = raw(self).get(key);
-  return value === "" ? Option.none() : Option.some(value);
-});
+>(2, (self, key) => Option.liftPredicate(Str.isNonEmpty)(raw(self).get(key)));
 
 /** @since 0.1.0 @category getters */
 export const getAll: {

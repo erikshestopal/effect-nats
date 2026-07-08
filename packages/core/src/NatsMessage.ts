@@ -8,7 +8,6 @@ import type { Msg, Payload } from "@nats-io/nats-core";
 import * as NatsHeaders from "./NatsHeaders.ts";
 import { NoReplySubjectError } from "./NatsError.ts";
 
-/** @since 0.1.0 @category models */
 export class NatsMessage extends Schema.Class<NatsMessage>("effect-nats/NatsMessage")({
   subject: Schema.String,
   payload: Schema.Uint8Array,
@@ -26,7 +25,6 @@ export class NatsMessage extends Schema.Class<NatsMessage>("effect-nats/NatsMess
   }
 }
 
-/** @since 0.1.0 @category models */
 export type RespondOptions = {
   readonly payload?: Payload;
   readonly headers?: NatsHeaders.Input;
@@ -51,19 +49,18 @@ export const fromMsg = (msg: Msg): NatsMessage => {
 export const isNatsMessage = Schema.is(NatsMessage);
 
 /** @since 0.1.0 @category combinators */
-export const respond = (self: NatsMessage, options: RespondOptions = {}) => {
-  const msg = sdkMessages.get(self);
-  if (Predicate.isUndefined(msg)) {
-    return Effect.fail(NoReplySubjectError.make({ subject: self.subject }));
-  }
-  return Effect.sync(() =>
-    msg.respond(
-      options.payload,
-      Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {},
-    ),
-  ).pipe(
-    Effect.andThen((responded) =>
-      responded ? Effect.void : Effect.fail(NoReplySubjectError.make({ subject: self.subject })),
-    ),
-  );
-};
+export const respond = (self: NatsMessage, options: RespondOptions = {}) =>
+  Option.match(Option.fromNullishOr(sdkMessages.get(self)), {
+    onNone: () => Effect.fail(NoReplySubjectError.make({ subject: self.subject })),
+    onSome: (msg) =>
+      Effect.sync(() =>
+        msg.respond(
+          options.payload,
+          Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {},
+        ),
+      ).pipe(
+        Effect.andThen((responded) =>
+          responded ? Effect.void : Effect.fail(NoReplySubjectError.make({ subject: self.subject })),
+        ),
+      ),
+  });

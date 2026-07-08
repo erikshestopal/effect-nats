@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Option, Predicate, Schema, Stream } from "effect";
+import { Effect, Fiber, Layer, Number as Num, Option, Predicate, Schema, Stream } from "effect";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import * as JetStream from "effect-nats/JetStream";
 import * as NatsClient from "effect-nats/NatsClient";
@@ -36,7 +36,7 @@ describe("NatsKv", () => {
 
       assert.isTrue(Predicate.isTagged(result.missing, "BucketNotFoundError"));
       assert.isTrue(Option.isNone(result.empty));
-      assert.strictEqual(result.revision2, result.revision1 + 1);
+      assert.strictEqual(result.revision2, Num.increment(result.revision1));
       assert.strictEqual(NatsKv.entryText(result.current), "two");
       assert.strictEqual(NatsKv.entryText(result.historical), "one");
       assert.strictEqual(result.current.operation, "PUT");

@@ -73,14 +73,12 @@ export interface Service {
   >;
 }
 
-/** @since 0.1.0 @category options */
 export type JetStreamOptions = {
   readonly apiPrefix?: string;
   readonly domain?: string;
   readonly timeout?: DurationInput;
 };
 
-/** @since 0.1.0 @category options */
 export type PublishOptions = {
   readonly payload?: Payload;
   readonly headers?: NatsHeaders.Input;
@@ -95,19 +93,16 @@ export type PublishOptions = {
   };
 };
 
-/** @since 0.1.0 @category options */
 export type NextOptions = {
   readonly expires?: DurationInput;
 };
 
-/** @since 0.1.0 @category options */
 export type FetchOptions = {
   readonly maxMessages?: number;
   readonly maxBytes?: number;
   readonly expires?: DurationInput;
 };
 
-/** @since 0.1.0 @category options */
 export type ConsumeOptions = {
   readonly maxMessages?: number;
   readonly maxBytes?: number;
@@ -118,7 +113,6 @@ export type ConsumeOptions = {
   readonly onNotification?: (notification: ConsumerNotification) => Effect.Effect<unknown>;
 };
 
-/** @since 0.1.0 @category models */
 export interface JsConsumer {
   readonly next: (
     options?: NextOptions,
@@ -130,7 +124,6 @@ export interface JsConsumer {
   }) => Effect.Effect<ConsumerInfo, JetStreamError.JetStreamApiError | JetStreamError.JetStreamError>;
 }
 
-/** @since 0.1.0 @category models */
 export class PubAck extends Schema.Class<PubAck>("effect-nats/JetStream/PubAck")({
   stream: Schema.String,
   seq: Schema.Finite,
@@ -142,40 +135,37 @@ export class PubAck extends Schema.Class<PubAck>("effect-nats/JetStream/PubAck")
 export class JetStream extends Context.Service<JetStream, Service>()("effect-nats/JetStream") {}
 
 /** @since 0.1.0 @category constructors */
-export const make = (
-  options: JetStreamOptions = {},
-): Effect.Effect<Service, never, NatsClient.NatsClient | JsMessage.JsMessageService> =>
-  Effect.gen(function* () {
-    const nats = yield* NatsClient.NatsClient;
-    const messages = yield* JsMessage.JsMessageService;
-    const client = jetstream(nats.connection, JsOptions.translateOptions(options));
-    return JetStream.of({
-      client,
-      publish: (subject, publishOptions = {}) =>
-        Effect.tryPromise({
-          try: () => client.publish(subject, publishOptions.payload, JsOptions.translatePublishOptions(publishOptions)),
-          catch: JsErrors.mapPublishError,
-        }).pipe(
-          Effect.map((ack) =>
-            PubAck.make({
-              stream: ack.stream,
-              seq: ack.seq,
-              duplicate: ack.duplicate,
-              domain: Option.fromNullishOr(ack.domain),
-            }),
-          ),
+export const make = Effect.fnUntraced(function* (options: JetStreamOptions = {}) {
+  const nats = yield* NatsClient.NatsClient;
+  const messages = yield* JsMessage.JsMessageService;
+  const client = jetstream(nats.connection, JsOptions.translateOptions(options));
+  return JetStream.of({
+    client,
+    publish: (subject, publishOptions = {}) =>
+      Effect.tryPromise({
+        try: () => client.publish(subject, publishOptions.payload, JsOptions.translatePublishOptions(publishOptions)),
+        catch: JsErrors.mapPublishError,
+      }).pipe(
+        Effect.map((ack) =>
+          PubAck.make({
+            stream: ack.stream,
+            seq: ack.seq,
+            duplicate: ack.duplicate,
+            domain: Option.fromNullishOr(ack.domain),
+          }),
         ),
-      consumer: (stream, name) => {
-        const consumerName = Predicate.isString(name) ? name : undefined;
-        return Effect.tryPromise({
-          try: () => client.consumers.get(stream, name),
-          catch: JsErrors.mapConsumerError(
-            Predicate.isUndefined(consumerName) ? { stream } : { stream, consumer: consumerName },
-          ),
-        }).pipe(Effect.map((consumer) => makeConsumer({ consumer, messages })));
-      },
-    });
+      ),
+    consumer: (stream, name) => {
+      const consumerName = Predicate.isString(name) ? name : undefined;
+      return Effect.tryPromise({
+        try: () => client.consumers.get(stream, name),
+        catch: JsErrors.mapConsumerError(
+          Predicate.isUndefined(consumerName) ? { stream } : { stream, consumer: consumerName },
+        ),
+      }).pipe(Effect.map((consumer) => makeConsumer({ consumer, messages })));
+    },
   });
+});
 
 const makeConsumer = (state: { readonly consumer: Consumer; readonly messages: JsMessage.Service }): JsConsumer => ({
   next: (options = {}) =>
@@ -244,5 +234,4 @@ export const layer = (
 ): Layer.Layer<JetStream | JsMessage.JsMessageService, never, NatsClient.NatsClient> =>
   Layer.effect(JetStream, make(options)).pipe(Layer.provideMerge(JsMessage.layer));
 
-/** @since 0.1.0 @category models */
 export type { ConsumerInfo, ConsumerNotification, OrderedConsumerOptions };

@@ -3,7 +3,18 @@
  *
  * @since 0.1.0
  */
-import { Array as Arr, Effect, Layer, Option, Predicate, Record as Rec, Schema, Scope, Stream } from "effect";
+import {
+  Array as Arr,
+  Effect,
+  Layer,
+  Number as Num,
+  Option,
+  Predicate,
+  Record as Rec,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import { ServiceError, ServiceErrorCodeHeader, ServiceErrorHeader, Svcm } from "@nats-io/services/internal";
 import type { Payload, QueuedIterator } from "@nats-io/nats-core";
 import type {
@@ -29,7 +40,6 @@ export class EndpointError extends Schema.TaggedErrorClass<EndpointError>("effec
   },
 ) {}
 
-/** @since 0.1.0 @category options */
 export type Endpoint<R> = {
   readonly handler: (msg: NatsMessage.NatsMessage) => Effect.Effect<Payload | void, EndpointError, R>;
   readonly subject?: string;
@@ -38,7 +48,6 @@ export type Endpoint<R> = {
   readonly concurrency?: number | "unbounded";
 };
 
-/** @since 0.1.0 @category options */
 export type ServiceOptions<R> = {
   readonly name: string;
   readonly version: string;
@@ -48,20 +57,17 @@ export type ServiceOptions<R> = {
   readonly endpoints: Readonly<Record<string, Endpoint<R>>>;
 };
 
-/** @since 0.1.0 @category models */
 export type RunningService = {
   readonly service: SdkService;
   readonly info: ServiceInfo;
   readonly stopped: Effect.Effect<Option.Option<NatsError.NatsError>>;
 };
 
-/** @since 0.1.0 @category options */
 export type DiscoverOptions = {
   readonly name?: string;
   readonly id?: string;
 };
 
-/** @since 0.1.0 @category models */
 export interface MicroClient {
   readonly ping: (options?: DiscoverOptions) => Stream.Stream<ServiceIdentity, NatsError.NatsError>;
   readonly info: (options?: DiscoverOptions) => Stream.Stream<ServiceInfo, NatsError.NatsError>;
@@ -69,34 +75,31 @@ export interface MicroClient {
 }
 
 /** @since 0.1.0 @category constructors */
-export const make = <R>(
-  options: ServiceOptions<R>,
-): Effect.Effect<RunningService, NatsError.NatsError, NatsClient.NatsClient | Scope.Scope | R> =>
-  Effect.gen(function* () {
-    const nats = yield* NatsClient.NatsClient;
-    const service = yield* Effect.acquireRelease(
-      Effect.tryPromise({
-        try: () => new Svcm(nats.connection).add(translateConfig(options)),
-        catch: Errors.mapError,
-      }),
-      release,
-    );
-    const errorCounts: Record<string, number> = {};
-    patchStats({ service, errorCounts });
-    yield* Effect.all(
-      Arr.map(Rec.toEntries(options.endpoints), ([name, endpoint]) =>
-        runEndpoint({ service, name, endpoint, errorCounts }),
-      ),
-    );
-    return {
-      service,
-      info: service.info(),
-      /* v8 ignore next -- stopped resolves when the owning scope closes */
-      stopped: Effect.promise(() => service.stopped).pipe(
-        Effect.map((cause) => (Predicate.isNull(cause) ? Option.none() : Option.some(Errors.mapError(cause)))),
-      ),
-    };
-  });
+export const make = Effect.fnUntraced(function* <R>(options: ServiceOptions<R>) {
+  const nats = yield* NatsClient.NatsClient;
+  const service = yield* Effect.acquireRelease(
+    Effect.tryPromise({
+      try: () => new Svcm(nats.connection).add(translateConfig(options)),
+      catch: Errors.mapError,
+    }),
+    release,
+  );
+  const errorCounts: Record<string, number> = {};
+  patchStats({ service, errorCounts });
+  yield* Effect.all(
+    Arr.map(Rec.toEntries(options.endpoints), ([name, endpoint]) =>
+      runEndpoint({ service, name, endpoint, errorCounts }),
+    ),
+  );
+  return {
+    service,
+    info: service.info(),
+    /* v8 ignore next -- stopped resolves when the owning scope closes */
+    stopped: Effect.promise(() => service.stopped).pipe(
+      Effect.map((cause) => Option.map(Option.fromNullishOr(cause), Errors.mapError)),
+    ),
+  };
+});
 
 /**
  * Runs a declarative NATS service for the layer lifetime.
@@ -226,7 +229,7 @@ const patchStats = (options: { readonly service: SdkService; readonly errorCount
           onSome: (endpoints) => ({
             endpoints: Arr.map(endpoints, (endpoint) => ({
               ...endpoint,
-              num_errors: endpoint.num_errors + (options.errorCounts[endpoint.name] ?? 0),
+              num_errors: Num.sum(endpoint.num_errors, options.errorCounts[endpoint.name] ?? 0),
             })),
           }),
         }),
@@ -236,7 +239,7 @@ const patchStats = (options: { readonly service: SdkService; readonly errorCount
 
 const incrementError = (options: { readonly errorCounts: Record<string, number>; readonly name: string }): void => {
   const { errorCounts, name } = options;
-  errorCounts[name] = (errorCounts[name] ?? 0) + 1;
+  errorCounts[name] = Num.increment(errorCounts[name] ?? 0);
 };
 
 const release = (service: SdkService): Effect.Effect<void> =>
@@ -245,5 +248,4 @@ const release = (service: SdkService): Effect.Effect<void> =>
 /** @since 0.1.0 @category errors */
 export { ServiceError, ServiceErrorCodeHeader, ServiceErrorHeader };
 
-/** @since 0.1.0 @category models */
 export type { ServiceIdentity, ServiceInfo, ServiceStats };

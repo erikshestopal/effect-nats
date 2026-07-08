@@ -52,7 +52,6 @@ export const ObjectStoreErrors = Schema.Union([ObjectStoreError, BucketNotFoundE
 /** @since 0.1.0 @category errors */
 export type ObjectStoreErrors = typeof ObjectStoreErrors.Type;
 
-/** @since 0.1.0 @category models */
 export class ObjectInfo extends Schema.Class<ObjectInfo>("effect-nats/NatsObjectStore/ObjectInfo")({
   name: Schema.String,
   bucket: Schema.String,
@@ -67,7 +66,6 @@ export class ObjectInfo extends Schema.Class<ObjectInfo>("effect-nats/NatsObject
   metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 }) {}
 
-/** @since 0.1.0 @category options */
 export type BucketOptions = {
   readonly description?: string;
   readonly ttl?: DurationInput;
@@ -78,7 +76,6 @@ export type BucketOptions = {
   readonly compression?: boolean;
 };
 
-/** @since 0.1.0 @category options */
 export type ObjectMeta = {
   readonly name: string;
   readonly description?: string;
@@ -87,13 +84,11 @@ export type ObjectMeta = {
   readonly metadata?: Readonly<Record<string, string>>;
 };
 
-/** @since 0.1.0 @category models */
 export type ObjectEntry = {
   readonly info: ObjectInfo;
   readonly data: Stream.Stream<Uint8Array, ObjectStoreErrors>;
 };
 
-/** @since 0.1.0 @category models */
 export interface ObjectStore {
   readonly put: (
     meta: ObjectMeta,
@@ -114,32 +109,27 @@ export interface ObjectStore {
 export class NatsObjectStore extends Context.Service<NatsObjectStore, ObjectStore>()("effect-nats/NatsObjectStore") {}
 
 /** @since 0.1.0 @category constructors */
-export const open = (bucket: string): Effect.Effect<ObjectStore, ObjectStoreErrors, JetStream.JetStream> =>
-  Effect.gen(function* () {
-    const js = yield* JetStream.JetStream;
-    const sdk = yield* Effect.tryPromise({
-      try: () => new Objm(js.client).open(bucket),
-      /* v8 ignore next -- defensive SDK failure mapping */
-      catch: (cause) =>
-        isNotFound(cause) ? new BucketNotFoundError({ bucket }) : new ObjectStoreError({ cause: toCause(cause) }),
-    });
-    return makeStore(sdk);
+export const open = Effect.fnUntraced(function* (bucket: string) {
+  const js = yield* JetStream.JetStream;
+  const sdk = yield* Effect.tryPromise({
+    try: () => new Objm(js.client).open(bucket),
+    /* v8 ignore next -- defensive SDK failure mapping */
+    catch: (cause) =>
+      isNotFound(cause) ? new BucketNotFoundError({ bucket }) : new ObjectStoreError({ cause: toCause(cause) }),
   });
+  return makeStore(sdk);
+});
 
 /** @since 0.1.0 @category constructors */
-export const create = (
-  bucket: string,
-  options: BucketOptions = {},
-): Effect.Effect<ObjectStore, ObjectStoreErrors, JetStream.JetStream> =>
-  Effect.gen(function* () {
-    const js = yield* JetStream.JetStream;
-    const sdk = yield* Effect.tryPromise({
-      try: () => new Objm(js.client).create(bucket, translateBucketOptions(options)),
-      /* v8 ignore next -- defensive SDK failure mapping */
-      catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-    });
-    return makeStore(sdk);
+export const create = Effect.fnUntraced(function* (bucket: string, options: BucketOptions = {}) {
+  const js = yield* JetStream.JetStream;
+  const sdk = yield* Effect.tryPromise({
+    try: () => new Objm(js.client).create(bucket, translateBucketOptions(options)),
+    /* v8 ignore next -- defensive SDK failure mapping */
+    catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
   });
+  return makeStore(sdk);
+});
 
 /**
  * Provides a scoped ObjectStore bucket service.
@@ -169,17 +159,16 @@ export const layer = (
   Layer.effect(NatsObjectStore, create(bucket, options));
 
 const makeStore = (sdk: SdkObjectStore): ObjectStore => ({
-  put: (meta, data) =>
-    Effect.gen(function* () {
-      const readable = yield* Stream.toReadableStreamEffect(
-        data.pipe(Stream.mapError((cause) => new ObjectStoreError({ cause: toCause(cause) }))),
-      );
-      return yield* Effect.tryPromise({
-        try: () => sdk.put(translateMeta(meta), readable),
-        /* v8 ignore next -- defensive SDK failure mapping */
-        catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-      }).pipe(Effect.map(fromSdkInfo));
-    }),
+  put: Effect.fnUntraced(function* (meta: ObjectMeta, data: Stream.Stream<Uint8Array, unknown, never>) {
+    const readable = yield* Stream.toReadableStreamEffect(
+      data.pipe(Stream.mapError((cause) => new ObjectStoreError({ cause: toCause(cause) }))),
+    );
+    return yield* Effect.tryPromise({
+      try: () => sdk.put(translateMeta(meta), readable),
+      /* v8 ignore next -- defensive SDK failure mapping */
+      catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
+    }).pipe(Effect.map(fromSdkInfo));
+  }),
   get: (name) =>
     Effect.tryPromise({
       try: () => sdk.get(name),
@@ -268,7 +257,7 @@ const checkDigest = (result: ObjectResult): Effect.Effect<void, ObjectStoreError
   );
 
 const mapReadError = (name: string, cause: unknown): ObjectStoreError | DigestMismatchError =>
-  Option.match(Str.indexOf("digest")(String(cause)), {
+  Option.match(Option.liftPredicate(Str.includes("digest"))(String(cause)), {
     /* v8 ignore next -- non-digest read failures are defensive SDK mapping */
     onNone: () => new ObjectStoreError({ cause: toCause(cause) }),
     onSome: () => new DigestMismatchError({ name, cause }),
@@ -312,4 +301,4 @@ const translateBucketOptions = (options: BucketOptions): Partial<SdkObjectStoreO
 });
 
 const isNotFound = (cause: unknown): boolean =>
-  Predicate.isError(cause) && Option.isSome(Str.indexOf("object store not found")(cause.message));
+  Predicate.isError(cause) && Str.includes("object store not found")(cause.message);

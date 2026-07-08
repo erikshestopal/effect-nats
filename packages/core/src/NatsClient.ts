@@ -3,7 +3,7 @@
  *
  * @since 0.1.0
  */
-import { Config, Context, Duration, Effect, Layer, Option, Predicate, Schema, Scope, Stream } from "effect";
+import { Config, Context, Duration, Effect, Layer, Match, Option, Predicate, Schema, Stream } from "effect";
 import type {
   ConnectionOptions,
   Msg,
@@ -23,10 +23,8 @@ import * as Errors from "./internal/errors.ts";
 import * as Iterator from "./internal/iterator.ts";
 import * as OptionsInternal from "./internal/options.ts";
 
-/** @since 0.1.0 @category models */
 export type ConnectionStatus = Status;
 
-/** @since 0.1.0 @category models */
 export type { Stats };
 
 /**
@@ -92,14 +90,12 @@ export interface Service {
   readonly stats: Effect.Effect<Stats>;
 }
 
-/** @since 0.1.0 @category options */
 export type PublishOptions = {
   readonly payload?: Payload;
   readonly headers?: NatsHeaders.Input;
   readonly replyTo?: string;
 };
 
-/** @since 0.1.0 @category options */
 export type RequestOptions = {
   readonly payload?: Payload;
   readonly headers?: NatsHeaders.Input;
@@ -112,13 +108,11 @@ export type RequestOptions = {
   readonly timeout?: DurationInput;
 };
 
-/** @since 0.1.0 @category options */
 export type SubscribeOptions = {
   readonly queue?: string;
   readonly max?: number;
 };
 
-/** @since 0.1.0 @category options */
 export type RequestManyOptions = {
   readonly payload?: Payload;
   readonly headers?: NatsHeaders.Input;
@@ -140,7 +134,6 @@ export type RequestManyOptions = {
  */
 export class NatsClient extends Context.Service<NatsClient, Service>()("effect-nats/NatsClient") {}
 
-/** @since 0.1.0 @category options */
 export type Options = {
   readonly servers?: string | ReadonlyArray<string>;
   readonly name?: string;
@@ -156,7 +149,6 @@ export type Options = {
   readonly transformOptions?: (options: ConnectionOptions) => ConnectionOptions;
 };
 
-/** @since 0.1.0 @category options */
 export type ReconnectOptions = {
   readonly maxAttempts?: number;
   readonly wait?: DurationInput;
@@ -164,28 +156,23 @@ export type ReconnectOptions = {
   readonly waitOnFirstConnect?: boolean;
 };
 
-/** @since 0.1.0 @category options */
 export class UserPass extends Schema.TaggedClass<UserPass>()("UserPass", {
   user: Schema.String,
   pass: Schema.Redacted(Schema.String),
 }) {}
 
-/** @since 0.1.0 @category options */
 export class Token extends Schema.TaggedClass<Token>()("Token", {
   token: Schema.Redacted(Schema.String),
 }) {}
 
-/** @since 0.1.0 @category options */
 export class Creds extends Schema.TaggedClass<Creds>()("Creds", {
   creds: Schema.Redacted(Schema.String),
 }) {}
 
-/** @since 0.1.0 @category options */
 export class NKey extends Schema.TaggedClass<NKey>()("NKey", {
   seed: Schema.Redacted(Schema.String),
 }) {}
 
-/** @since 0.1.0 @category options */
 export type Auth = UserPass | Token | Creds | NKey;
 
 export const drainTimeout = "5 seconds";
@@ -205,18 +192,13 @@ const releaseSubscription = (subscription: Subscription) =>
     Effect.ignore,
   );
 
-const requestManyStrategy = (options: RequestManyOptions) => {
-  if (Predicate.isNotUndefined(options.maxMessages)) {
-    return "count";
-  }
-  if (Predicate.isNotUndefined(options.stall)) {
-    return "stall";
-  }
-  if (options.sentinel === true) {
-    return "sentinel";
-  }
-  return "timer";
-};
+const requestManyStrategy = (options: RequestManyOptions) =>
+  Match.value(options).pipe(
+    Match.when({ maxMessages: Match.defined }, () => "count" as const),
+    Match.when({ stall: Match.defined }, () => "stall" as const),
+    Match.when({ sentinel: true }, () => "sentinel" as const),
+    Match.orElse(() => "timer" as const),
+  );
 
 /* v8 ignore next -- SDK status iterators are not expected to throw. */
 const statusError = (cause: unknown): never => {
@@ -232,93 +214,84 @@ const statusError = (cause: unknown): never => {
  * @since 0.1.0
  * @category constructors
  */
-export const make = (
-  options: Options = {},
-): Effect.Effect<
-  Service,
-  NatsError.ConnectionError | NatsError.TimeoutError,
-  NatsConnector.NatsConnector | Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const connector = yield* NatsConnector.NatsConnector;
-    const connection = yield* Effect.acquireRelease(connector.connect(OptionsInternal.translate(options)), release);
-    return NatsClient.of({
-      connection,
-      closed: Effect.promise(() => connection.closed()).pipe(Effect.map(Errors.mapClosed)),
-      publish: (subject, options = {}) =>
-        Effect.try({
-          try: () =>
-            connection.publish(subject, options.payload, {
-              ...(Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {}),
-              ...(Predicate.isNotUndefined(options.replyTo) ? { reply: options.replyTo } : {}),
-            }),
-          catch: (cause) => Errors.mapPublishError({ subject, cause }),
-        }),
-      flush: Effect.tryPromise({
-        try: () => connection.flush(),
-        catch: Errors.mapFlushError,
+export const make = Effect.fnUntraced(function* (options: Options = {}) {
+  const connector = yield* NatsConnector.NatsConnector;
+  const connection = yield* Effect.acquireRelease(connector.connect(OptionsInternal.translate(options)), release);
+  return NatsClient.of({
+    connection,
+    closed: Effect.promise(() => connection.closed()).pipe(Effect.map(Errors.mapClosed)),
+    publish: (subject, options = {}) =>
+      Effect.try({
+        try: () =>
+          connection.publish(subject, options.payload, {
+            ...(Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {}),
+            ...(Predicate.isNotUndefined(options.replyTo) ? { reply: options.replyTo } : {}),
+          }),
+        catch: (cause) => Errors.mapPublishError({ subject, cause }),
       }),
-      rtt: Effect.tryPromise({
-        try: () => connection.rtt(),
-        catch: Errors.mapRttError,
-      }).pipe(Effect.map(Duration.millis)),
-      request: (subject, options = {}) =>
+    flush: Effect.tryPromise({
+      try: () => connection.flush(),
+      catch: Errors.mapFlushError,
+    }),
+    rtt: Effect.tryPromise({
+      try: () => connection.rtt(),
+      catch: Errors.mapRttError,
+    }).pipe(Effect.map(Duration.millis)),
+    request: (subject, options = {}) =>
+      Effect.tryPromise({
+        try: () =>
+          connection.request(subject, options.payload, {
+            timeout: Predicate.isNotUndefined(options.timeout) ? Duration.toMillis(options.timeout) : 1_000,
+            ...(Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {}),
+          }),
+        catch: (cause) => Errors.mapRequestError({ subject, cause }),
+      }).pipe(Effect.map(NatsMessage.fromMsg)),
+    subscribeRaw: (subject, options = {}) =>
+      Iterator.streamFromQueuedIterator<Msg, Subscription, Msg, NatsError.NatsError>({
+        acquire: Effect.try({
+          try: () => connection.subscribe(subject, options),
+          catch: Errors.mapError,
+        }),
+        transform: (message) => message,
+        onError: Errors.mapError,
+        onRelease: releaseSubscription,
+      }),
+    subscribe: (subject, options = {}) =>
+      Iterator.streamFromQueuedIterator<Msg, Subscription, NatsMessage.NatsMessage, NatsError.NatsError>({
+        acquire: Effect.try({
+          try: () => connection.subscribe(subject, options),
+          catch: Errors.mapError,
+        }),
+        transform: NatsMessage.fromMsg,
+        onError: Errors.mapError,
+        onRelease: releaseSubscription,
+      }),
+    requestMany: (subject, options) =>
+      Stream.unwrap(
         Effect.tryPromise({
           try: () =>
-            connection.request(subject, options.payload, {
-              timeout: Predicate.isNotUndefined(options.timeout) ? Duration.toMillis(options.timeout) : 1_000,
+            connection.requestMany(subject, options.payload, {
+              strategy: requestManyStrategy(options),
+              maxWait: Duration.toMillis(options.maxWait),
+              ...(Predicate.isNotUndefined(options.maxMessages) ? { maxMessages: options.maxMessages } : {}),
+              ...(Predicate.isNotUndefined(options.stall) ? { stall: Duration.toMillis(options.stall) } : {}),
               ...(Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {}),
             }),
-          catch: (cause) => Errors.mapRequestError({ subject, cause }),
-        }).pipe(Effect.map(NatsMessage.fromMsg)),
-      subscribeRaw: (subject, options = {}) =>
-        Iterator.streamFromQueuedIterator<Msg, Subscription, Msg, NatsError.NatsError>({
-          acquire: Effect.try({
-            try: () => connection.subscribe(subject, options),
-            catch: Errors.mapError,
-          }),
-          transform: (message) => message,
-          onError: Errors.mapError,
-          onRelease: releaseSubscription,
-        }),
-      subscribe: (subject, options = {}) =>
-        Iterator.streamFromQueuedIterator<Msg, Subscription, NatsMessage.NatsMessage, NatsError.NatsError>({
-          acquire: Effect.try({
-            try: () => connection.subscribe(subject, options),
-            catch: Errors.mapError,
-          }),
-          transform: NatsMessage.fromMsg,
-          onError: Errors.mapError,
-          onRelease: releaseSubscription,
-        }),
-      requestMany: (subject, options) =>
-        Stream.unwrap(
-          Effect.tryPromise({
-            try: () =>
-              connection.requestMany(subject, options.payload, {
-                strategy: requestManyStrategy(options),
-                maxWait: Duration.toMillis(options.maxWait),
-                ...(Predicate.isNotUndefined(options.maxMessages) ? { maxMessages: options.maxMessages } : {}),
-                ...(Predicate.isNotUndefined(options.stall) ? { stall: Duration.toMillis(options.stall) } : {}),
-                ...(Predicate.isNotUndefined(options.headers)
-                  ? { headers: NatsHeaders.toMsgHdrs(options.headers) }
-                  : {}),
-              }),
-            catch: Errors.mapError,
-          }).pipe(
-            Effect.map((iter) =>
-              Iterator.streamFromQueuedIterator<Msg, AsyncIterable<Msg>, NatsMessage.NatsMessage, NatsError.NatsError>({
-                acquire: Effect.succeed(iter),
-                transform: NatsMessage.fromMsg,
-                onError: Errors.mapError,
-              }),
-            ),
+          catch: Errors.mapError,
+        }).pipe(
+          Effect.map((iter) =>
+            Iterator.streamFromQueuedIterator<Msg, AsyncIterable<Msg>, NatsMessage.NatsMessage, NatsError.NatsError>({
+              acquire: Effect.succeed(iter),
+              transform: NatsMessage.fromMsg,
+              onError: Errors.mapError,
+            }),
           ),
         ),
-      status: Stream.fromAsyncIterable(connection.status(), statusError),
-      stats: Effect.sync(() => connection.stats()),
-    });
+      ),
+    status: Stream.fromAsyncIterable(connection.status(), statusError),
+    stats: Effect.sync(() => connection.stats()),
   });
+});
 
 /**
  * Provides a scoped NATS client from explicit connection options.

@@ -9,7 +9,6 @@ import type { JsMsg } from "@nats-io/jetstream";
 import * as NatsError from "./NatsError.ts";
 import * as NatsHeaders from "./NatsHeaders.ts";
 
-/** @since 0.1.0 @category models */
 export class JsMessage extends Schema.Class<JsMessage>("effect-nats/JsMessage")({
   subject: Schema.String,
   payload: Schema.Uint8Array,
@@ -34,17 +33,14 @@ export class JsMessage extends Schema.Class<JsMessage>("effect-nats/JsMessage")(
   }
 }
 
-/** @since 0.1.0 @category options */
 export type NakOptions = {
   readonly delay?: DurationInput;
 };
 
-/** @since 0.1.0 @category options */
 export type TermOptions = {
   readonly reason?: string;
 };
 
-/** @since 0.1.0 @category options */
 export type ProcessWithOptions = {
   readonly handler: (msg: JsMessage) => Effect.Effect<unknown, unknown, unknown>;
   readonly nakDelay?: DurationInput;

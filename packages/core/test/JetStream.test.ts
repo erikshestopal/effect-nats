@@ -1,5 +1,17 @@
 import { assert, describe, it } from "@effect/vitest";
-import { DateTime, Effect, Equal, Layer, Option, Predicate, Ref, Schema, Stream } from "effect";
+import {
+  Array as Arr,
+  DateTime,
+  Effect,
+  Equal,
+  Layer,
+  Number as Num,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import { DeliverPolicy } from "@nats-io/jetstream";
 import * as JetStream from "effect-nats/JetStream";
 import * as JsMessage from "effect-nats/JsMessage";
@@ -378,7 +390,7 @@ describe("JetStream", () => {
           const consumed = yield* consumer
             .consume({
               maxMessages: 10,
-              onNotification: () => Ref.update(notifications, (count) => count + 1),
+              onNotification: () => Ref.update(notifications, Num.increment),
             })
             .pipe(Stream.tap(messages.processWith({ handler: () => Effect.void })), Stream.take(50), Stream.runCollect);
           const after = yield* consumer.next({ expires: "1 second" });
@@ -389,7 +401,7 @@ describe("JetStream", () => {
 
       assert.deepStrictEqual(
         [...result.consumed].map((message) => message.text),
-        Array.from({ length: 50 }, (_value, index) => String(index)),
+        Arr.makeBy(50, String),
       );
       assert.isTrue(Option.isNone(result.after));
       assert.isAbove(result.notificationCount, 0);

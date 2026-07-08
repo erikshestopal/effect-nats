@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Option } from "effect";
+import { Array as Arr, Option } from "effect";
 import * as NatsHeaders from "effect-nats/NatsHeaders";
 
 describe("NatsHeaders", () => {
@@ -29,14 +29,14 @@ describe("NatsHeaders", () => {
     ]);
 
     assert.deepStrictEqual(NatsHeaders.getAll(headers, "x"), ["1", "2"]);
-    assert.deepStrictEqual(Array.from(headers), [["x", ["1", "2"]]]);
+    assert.deepStrictEqual(Arr.fromIterable(headers), [["x", ["1", "2"]]]);
   });
 
   it("empty iterates to nothing", () => {
-    assert.deepStrictEqual(Array.from(NatsHeaders.empty), []);
+    assert.deepStrictEqual(Arr.fromIterable(NatsHeaders.empty), []);
   });
 
   it("defaults absent input to empty headers", () => {
-    assert.deepStrictEqual(Array.from(NatsHeaders.fromInput()), []);
+    assert.deepStrictEqual(Arr.fromIterable(NatsHeaders.fromInput()), []);
   });
 });

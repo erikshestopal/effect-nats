@@ -4,7 +4,19 @@
  * @since 0.1.0
  */
 /* eslint-disable agent/max-positional-params */
-import { Context, DateTime, Duration, Effect, Layer, Option, Predicate, Schema, Stream, String as Str } from "effect";
+import {
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Layer,
+  Match,
+  Option,
+  Predicate,
+  Schema,
+  Stream,
+  String as Str,
+} from "effect";
 import { Kvm, KvWatchInclude } from "@nats-io/kv";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import type { Payload } from "@nats-io/nats-core";
@@ -27,7 +39,6 @@ export class KeyExistsError extends Schema.TaggedErrorClass<KeyExistsError>("eff
   { key: Schema.String },
 ) {}
 
-/** @since 0.1.0 @category models */
 export class KvEntry extends Schema.Class<KvEntry>("effect-nats/NatsKv/KvEntry")({
   key: Schema.String,
   value: Schema.Uint8Array,
@@ -37,7 +48,6 @@ export class KvEntry extends Schema.Class<KvEntry>("effect-nats/NatsKv/KvEntry")
   isUpdate: Schema.Boolean,
 }) {}
 
-/** @since 0.1.0 @category options */
 export type BucketOptions = {
   readonly history?: number;
   readonly ttl?: DurationInput;
@@ -50,7 +60,6 @@ export type BucketOptions = {
   readonly transformOptions?: (options: Partial<KvOptions>) => Partial<KvOptions>;
 };
 
-/** @since 0.1.0 @category options */
 export type WatchOptions = {
   readonly key?: string | ReadonlyArray<string>;
   readonly include?: "lastValue" | "allHistory" | "updatesOnly";
@@ -58,7 +67,6 @@ export type WatchOptions = {
   readonly resumeFromRevision?: number;
 };
 
-/** @since 0.1.0 @category models */
 export interface Kv {
   readonly get: (
     key: string,
@@ -98,34 +106,27 @@ export const entrySchemaJson = <S extends Schema.Top>(entry: KvEntry, schema: S)
   Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(entryText(entry));
 
 /** @since 0.1.0 @category constructors */
-export const open = (
-  bucket: string,
-): Effect.Effect<Kv, BucketNotFoundError | JetStreamError.JetStreamErrors, JetStream.JetStream> =>
-  Effect.gen(function* () {
-    const js = yield* JetStream.JetStream;
-    const sdk = yield* Effect.tryPromise({
-      try: () => new Kvm(js.client).open(bucket),
-      /* v8 ignore next */
-      catch: (cause) => (isNotFound(cause) ? new BucketNotFoundError({ bucket }) : JsErrors.mapJetStreamError(cause)),
-    });
-    const kv = makeBucket(sdk);
-    yield* kv.status.pipe(Effect.catchTag("JetStreamApiError", () => Effect.fail(new BucketNotFoundError({ bucket }))));
-    return kv;
+export const open = Effect.fnUntraced(function* (bucket: string) {
+  const js = yield* JetStream.JetStream;
+  const sdk = yield* Effect.tryPromise({
+    try: () => new Kvm(js.client).open(bucket),
+    /* v8 ignore next */
+    catch: (cause) => (isNotFound(cause) ? new BucketNotFoundError({ bucket }) : JsErrors.mapJetStreamError(cause)),
   });
+  const kv = makeBucket(sdk);
+  yield* kv.status.pipe(Effect.catchTag("JetStreamApiError", () => Effect.fail(new BucketNotFoundError({ bucket }))));
+  return kv;
+});
 
 /** @since 0.1.0 @category constructors */
-export const create = (
-  bucket: string,
-  options: BucketOptions = {},
-): Effect.Effect<Kv, JetStreamError.JetStreamErrors, JetStream.JetStream> =>
-  Effect.gen(function* () {
-    const js = yield* JetStream.JetStream;
-    const sdk = yield* Effect.tryPromise({
-      try: () => new Kvm(js.client).create(bucket, translateBucketOptions(options)),
-      catch: JsErrors.mapJetStreamError,
-    });
-    return makeBucket(sdk);
+export const create = Effect.fnUntraced(function* (bucket: string, options: BucketOptions = {}) {
+  const js = yield* JetStream.JetStream;
+  const sdk = yield* Effect.tryPromise({
+    try: () => new Kvm(js.client).create(bucket, translateBucketOptions(options)),
+    catch: JsErrors.mapJetStreamError,
   });
+  return makeBucket(sdk);
+});
 
 /**
  * Provides a scoped KV bucket service.
@@ -278,11 +279,7 @@ const makeKeyValueStore = (kv: Kv): KeyValueStore.KeyValueStore =>
       Stream.runForEach((key) => kv.purge(key)),
       mapKvStoreError("clear"),
     ),
-    size: kv.keys().pipe(
-      Stream.runCollect,
-      Effect.map((keys) => keys.length),
-      mapKvStoreError("size"),
-    ),
+    size: kv.keys().pipe(Stream.runCount, mapKvStoreError("size")),
   });
 
 const mapKvStoreError = (method: string, key?: string) =>
@@ -353,9 +350,10 @@ const translateWatchOptions = (options: WatchOptions) => {
   if (Predicate.isNotUndefined(options.key)) {
     translated.key = Predicate.isString(options.key) ? options.key : [...options.key];
   }
-  Option.map(translateWatchInclude(options.include), (include) => {
-    translated.include = include;
-  });
+  const include = translateWatchInclude(options.include);
+  if (Option.isSome(include)) {
+    translated.include = include.value;
+  }
   if (Predicate.isNotUndefined(options.ignoreDeletes)) {
     translated.ignoreDeletes = options.ignoreDeletes;
   }
@@ -366,14 +364,13 @@ const translateWatchOptions = (options: WatchOptions) => {
 };
 
 const translateWatchInclude = (include: WatchOptions["include"]): Option.Option<KvWatchInclude> =>
-  include === "allHistory"
-    ? Option.some(KvWatchInclude.AllHistory)
-    : include === "updatesOnly"
-      ? Option.some(KvWatchInclude.UpdatesOnly)
-      : include === "lastValue"
-        ? Option.some(KvWatchInclude.LastValue)
-        : Option.none();
+  Match.value(include).pipe(
+    Match.when("allHistory", () => Option.some(KvWatchInclude.AllHistory)),
+    Match.when("updatesOnly", () => Option.some(KvWatchInclude.UpdatesOnly)),
+    Match.when("lastValue", () => Option.some(KvWatchInclude.LastValue)),
+    Match.orElse(() => Option.none()),
+  );
 
 /* v8 ignore next */
 const isNotFound = (cause: unknown): boolean =>
-  Predicate.isError(cause) && Option.isSome(Str.indexOf("stream not found")(cause.message));
+  Predicate.isError(cause) && Str.includes("stream not found")(cause.message);
