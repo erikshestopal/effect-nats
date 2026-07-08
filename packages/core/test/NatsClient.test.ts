@@ -161,7 +161,7 @@ describe("NatsClient", () => {
               inboxPrefix: Config.succeed("_INBOX.CONFIG"),
               tls: Config.succeed({}),
               ignoreClusterUpdates: Config.succeed(true),
-              transformOptions: ({ tls: _tls, ...options }) => options,
+              transformOptions: Config.succeed(({ tls: _tls, ...options }) => options),
             }).pipe(Layer.provide(NodeConnector.layer)),
           ),
         ),
@@ -181,7 +181,7 @@ describe("NatsClient", () => {
         }).pipe(
           Effect.provide(
             NatsClient.layerConfig({
-              transformOptions: (options) => ({ ...options, servers: server.url }),
+              transformOptions: Config.succeed((options) => ({ ...options, servers: server.url })),
             }).pipe(Layer.provide(NodeConnector.layer)),
           ),
         ),

@@ -15,10 +15,8 @@ export interface Connector {
   ) => Effect.Effect<NatsConnection, NatsError.ConnectionError | NatsError.TimeoutError>;
 }
 
-/** @since 0.1.0 @category services */
 export class NatsConnector extends Context.Service<NatsConnector, Connector>()("effect-nats/NatsConnector") {}
 
-/** @since 0.1.0 @category layers */
 export const layerWebSocket: Layer.Layer<NatsConnector> = Layer.succeed(
   NatsConnector,
   NatsConnector.of({

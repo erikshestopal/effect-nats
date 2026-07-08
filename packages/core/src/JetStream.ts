@@ -131,10 +131,8 @@ export class PubAck extends Schema.Class<PubAck>("effect-nats/JetStream/PubAck")
   domain: Schema.Option(Schema.String),
 }) {}
 
-/** @since 0.1.0 @category services */
 export class JetStream extends Context.Service<JetStream, Service>()("effect-nats/JetStream") {}
 
-/** @since 0.1.0 @category constructors */
 export const make = Effect.fnUntraced(function* (options: JetStreamOptions = {}) {
   const nats = yield* NatsClient.NatsClient;
   const messages = yield* JsMessage.JsMessageService;
@@ -155,15 +153,16 @@ export const make = Effect.fnUntraced(function* (options: JetStreamOptions = {})
           }),
         ),
       ),
-    consumer: (stream, name) => {
-      const consumerName = Predicate.isString(name) ? name : undefined;
-      return Effect.tryPromise({
+    consumer: (stream, name) =>
+      Effect.tryPromise({
         try: () => client.consumers.get(stream, name),
         catch: JsErrors.mapConsumerError(
-          Predicate.isUndefined(consumerName) ? { stream } : { stream, consumer: consumerName },
+          Option.match(Option.liftPredicate(Predicate.isString)(name), {
+            onNone: () => ({ stream }),
+            onSome: (consumer) => ({ stream, consumer }),
+          }),
         ),
-      }).pipe(Effect.map((consumer) => makeConsumer({ consumer, messages })));
-    },
+      }).pipe(Effect.map((consumer) => makeConsumer({ consumer, messages }))),
   });
 });
 
@@ -172,7 +171,7 @@ const makeConsumer = (state: { readonly consumer: Consumer; readonly messages: J
     Effect.tryPromise({
       try: () => state.consumer.next(JsOptions.translateNextOptions(options)),
       catch: JsErrors.mapJetStreamError,
-    }).pipe(Effect.map((message) => Option.fromNullishOr(message).pipe(Option.map(state.messages.fromJsMsg)))),
+    }).pipe(Effect.map((message) => Option.map(Option.fromNullishOr(message), state.messages.fromJsMsg))),
   fetch: (options = {}) =>
     Iterators.streamFromQueuedIterator({
       acquire: Effect.tryPromise({

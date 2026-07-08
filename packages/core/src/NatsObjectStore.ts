@@ -31,25 +31,20 @@ import * as JetStream from "./JetStream.ts";
 import * as NatsHeaders from "./NatsHeaders.ts";
 import * as Iterators from "./internal/iterator.ts";
 
-/** @since 0.1.0 @category errors */
 export class ObjectStoreError extends Schema.TaggedErrorClass<ObjectStoreError>(
   "effect-nats/NatsObjectStore/ObjectStoreError",
 )("ObjectStoreError", { cause: Schema.Defect() }) {}
 
-/** @since 0.1.0 @category errors */
 export class BucketNotFoundError extends Schema.TaggedErrorClass<BucketNotFoundError>(
   "effect-nats/NatsObjectStore/BucketNotFoundError",
 )("BucketNotFoundError", { bucket: Schema.String }) {}
 
-/** @since 0.1.0 @category errors */
 export class DigestMismatchError extends Schema.TaggedErrorClass<DigestMismatchError>(
   "effect-nats/NatsObjectStore/DigestMismatchError",
 )("DigestMismatchError", { name: Schema.String, cause: Schema.Defect() }) {}
 
-/** @since 0.1.0 @category errors */
 export const ObjectStoreErrors = Schema.Union([ObjectStoreError, BucketNotFoundError, DigestMismatchError]);
 
-/** @since 0.1.0 @category errors */
 export type ObjectStoreErrors = typeof ObjectStoreErrors.Type;
 
 export class ObjectInfo extends Schema.Class<ObjectInfo>("effect-nats/NatsObjectStore/ObjectInfo")({
@@ -105,10 +100,8 @@ export interface ObjectStore {
   readonly status: Effect.Effect<ObjectStoreStatus, ObjectStoreErrors>;
 }
 
-/** @since 0.1.0 @category services */
 export class NatsObjectStore extends Context.Service<NatsObjectStore, ObjectStore>()("effect-nats/NatsObjectStore") {}
 
-/** @since 0.1.0 @category constructors */
 export const open = Effect.fnUntraced(function* (bucket: string) {
   const js = yield* JetStream.JetStream;
   const sdk = yield* Effect.tryPromise({
@@ -120,13 +113,12 @@ export const open = Effect.fnUntraced(function* (bucket: string) {
   return makeStore(sdk);
 });
 
-/** @since 0.1.0 @category constructors */
 export const create = Effect.fnUntraced(function* (bucket: string, options: BucketOptions = {}) {
   const js = yield* JetStream.JetStream;
   const sdk = yield* Effect.tryPromise({
     try: () => new Objm(js.client).create(bucket, translateBucketOptions(options)),
     /* v8 ignore next -- defensive SDK failure mapping */
-    catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
+    catch: mapError,
   });
   return makeStore(sdk);
 });
@@ -158,41 +150,23 @@ export const layer = (
 ): Layer.Layer<NatsObjectStore, ObjectStoreErrors, JetStream.JetStream> =>
   Layer.effect(NatsObjectStore, create(bucket, options));
 
+/* v8 ignore next -- defensive SDK failure mapping */
+const mapError = (cause: unknown) => new ObjectStoreError({ cause: toCause(cause) });
+
+const trySdk = <A>(try_: () => PromiseLike<A>): Effect.Effect<A, ObjectStoreError> =>
+  Effect.tryPromise({ try: try_, catch: mapError });
+
 const makeStore = (sdk: SdkObjectStore): ObjectStore => ({
   put: Effect.fnUntraced(function* (meta: ObjectMeta, data: Stream.Stream<Uint8Array, unknown, never>) {
-    const readable = yield* Stream.toReadableStreamEffect(
-      data.pipe(Stream.mapError((cause) => new ObjectStoreError({ cause: toCause(cause) }))),
-    );
-    return yield* Effect.tryPromise({
-      try: () => sdk.put(translateMeta(meta), readable),
-      /* v8 ignore next -- defensive SDK failure mapping */
-      catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-    }).pipe(Effect.map(fromSdkInfo));
+    const readable = yield* Stream.toReadableStreamEffect(data.pipe(Stream.mapError(mapError)));
+    return yield* trySdk(() => sdk.put(translateMeta(meta), readable)).pipe(Effect.map(fromSdkInfo));
   }),
   get: (name) =>
-    Effect.tryPromise({
-      try: () => sdk.get(name),
-      /* v8 ignore next -- defensive SDK failure mapping */
-      catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-    }).pipe(Effect.map((result) => Option.fromNullishOr(result).pipe(Option.map(fromResult)))),
-  putBlob: (meta, data) =>
-    Effect.tryPromise({
-      try: () => sdk.putBlob(translateMeta(meta), data),
-      /* v8 ignore next -- defensive SDK failure mapping */
-      catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-    }).pipe(Effect.map(fromSdkInfo)),
-  getBlob: (name) =>
-    Effect.tryPromise({
-      try: () => sdk.getBlob(name),
-      /* v8 ignore next -- defensive SDK failure mapping */
-      catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-    }).pipe(Effect.map(Option.fromNullishOr)),
+    trySdk(() => sdk.get(name)).pipe(Effect.map((result) => Option.map(Option.fromNullishOr(result), fromResult))),
+  putBlob: (meta, data) => trySdk(() => sdk.putBlob(translateMeta(meta), data)).pipe(Effect.map(fromSdkInfo)),
+  getBlob: (name) => trySdk(() => sdk.getBlob(name)).pipe(Effect.map(Option.fromNullishOr)),
   info: (name) =>
-    Effect.tryPromise({
-      try: () => sdk.info(name),
-      /* v8 ignore next -- defensive SDK failure mapping */
-      catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-    }).pipe(
+    trySdk(() => sdk.info(name)).pipe(
       Effect.map((info) =>
         Option.fromNullishOr(info).pipe(
           Option.filter((objectInfo) => !objectInfo.deleted),
@@ -200,39 +174,18 @@ const makeStore = (sdk: SdkObjectStore): ObjectStore => ({
         ),
       ),
     ),
-  list: Effect.tryPromise({
-    try: () => sdk.list(),
-    /* v8 ignore next -- defensive SDK failure mapping */
-    catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-  }).pipe(Effect.map(Arr.map(fromSdkInfo))),
-  delete: (name) =>
-    Effect.tryPromise({
-      try: () => sdk.delete(name),
-      /* v8 ignore next -- defensive SDK failure mapping */
-      catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-    }).pipe(Effect.asVoid),
+  list: trySdk(() => sdk.list()).pipe(Effect.map(Arr.map(fromSdkInfo))),
+  delete: (name) => trySdk(() => sdk.delete(name)).pipe(Effect.asVoid),
   watch: (options = {}) =>
     Iterators.streamFromQueuedIterator({
-      acquire: Effect.tryPromise({
-        try: () =>
-          sdk.watch(Predicate.isUndefined(options.includeHistory) ? {} : { includeHistory: options.includeHistory }),
-        /* v8 ignore next -- defensive SDK failure mapping */
-        catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-      }),
+      acquire: trySdk(() =>
+        sdk.watch(Predicate.isUndefined(options.includeHistory) ? {} : { includeHistory: options.includeHistory }),
+      ),
       transform: fromSdkInfo,
-      /* v8 ignore next -- defensive iterator failure mapping */
-      onError: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
+      onError: mapError,
     }),
-  seal: Effect.tryPromise({
-    try: () => sdk.seal(),
-    /* v8 ignore next -- defensive SDK failure mapping */
-    catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-  }).pipe(Effect.asVoid),
-  status: Effect.tryPromise({
-    try: () => sdk.status(),
-    /* v8 ignore next -- defensive SDK failure mapping */
-    catch: (cause) => new ObjectStoreError({ cause: toCause(cause) }),
-  }),
+  seal: trySdk(() => sdk.seal()).pipe(Effect.asVoid),
+  status: trySdk(() => sdk.status()),
 });
 
 const fromResult = (result: ObjectResult): ObjectEntry => ({
@@ -247,11 +200,11 @@ const fromResult = (result: ObjectResult): ObjectEntry => ({
 const checkDigest = (result: ObjectResult): Effect.Effect<void, ObjectStoreErrors> =>
   Effect.promise(() => result.error).pipe(
     Effect.map(Option.fromNullishOr),
-    Effect.flatMap(
-      Option.match({
+    Effect.flatMap((error) =>
+      Option.match(error, {
         onNone: () => Effect.void,
         /* v8 ignore next -- SDK reports digest failures through the readable stream in covered broker tests */
-        onSome: (error) => Effect.fail(mapReadError(result.info.name, error)),
+        onSome: (cause) => Effect.fail(mapReadError(result.info.name, cause)),
       }),
     ),
   );

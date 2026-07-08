@@ -28,3 +28,8 @@ Prefer Effect data modules over native operators and ad-hoc helpers:
 - `Effect.fnUntraced` for reusable effectful constructors (`make` / `open` / `create`). Keep `Effect.gen` for immediate-use inline bodies (do not call `Effect.fnUntraced(...)()` — tsgo `effectFnIife` flags it).
 - `Option.match` / `Option.fromNullishOr` for nullish SDK handles instead of imperative `if (isUndefined)`.
 - When adding Effect String helpers such as `Str.includes`, keep ast-grep `no-native-array-methods` exclusions for `Str`/`String` (both modules share method names like `includes`).
+- Prefer `Config.Wrap` + `Config.unwrap` for `layerConfig` (Effect SQL client style) over hand-yielding each optional config field. Plain non-config options such as `transformOptions` are `Config.succeed(fn)`.
+- Prefer `Effect.fromOption` when an absent Option should become an Effect failure; prefer `Option.getOrElse` / `Option.map` pipelines over `Option.match` when building plain values.
+- Prefer `Function.identity` for no-op stream transforms; keep explicit type parameters on `streamFromQueuedIterator` when identity would widen to `unknown`.
+- Collapse repeated SDK `Effect.tryPromise({ catch })` mappers into one local catcher used by a small `trySdk` helper when the mapping is identical across a module.
+- `Option.getOrElse` takes a **lazy** fallback (`() => value`), not a bare value.

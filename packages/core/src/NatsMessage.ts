@@ -14,12 +14,10 @@ export class NatsMessage extends Schema.Class<NatsMessage>("effect-nats/NatsMess
   replyTo: Schema.Option(Schema.String),
   headers: NatsHeaders.NatsHeaders,
 }) {
-  /** @since 0.1.0 */
   get text(): string {
     return decoder.decode(this.payload);
   }
 
-  /** @since 0.1.0 */
   json<S extends Schema.Top>(schema: S): Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]> {
     return Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(this.text);
   }
@@ -33,34 +31,35 @@ export type RespondOptions = {
 const decoder = new TextDecoder();
 const sdkMessages = new WeakMap<NatsMessage, Msg>();
 
-/** @since 0.1.0 @category constructors */
 export const fromMsg = (msg: Msg): NatsMessage => {
   const message = NatsMessage.make({
     subject: msg.subject,
     payload: msg.data,
     replyTo: Option.fromNullishOr(msg.reply),
-    headers: Predicate.isNotUndefined(msg.headers) ? NatsHeaders.fromMsgHdrs(msg.headers) : NatsHeaders.empty,
+    headers: Option.getOrElse(
+      Option.map(Option.fromUndefinedOr(msg.headers), NatsHeaders.fromMsgHdrs),
+      () => NatsHeaders.empty,
+    ),
   });
   sdkMessages.set(message, msg);
   return message;
 };
 
-/** @since 0.1.0 @category guards */
 export const isNatsMessage = Schema.is(NatsMessage);
 
-/** @since 0.1.0 @category combinators */
 export const respond = (self: NatsMessage, options: RespondOptions = {}) =>
-  Option.match(Option.fromNullishOr(sdkMessages.get(self)), {
-    onNone: () => Effect.fail(NoReplySubjectError.make({ subject: self.subject })),
-    onSome: (msg) =>
+  Effect.fromOption(Option.fromNullishOr(sdkMessages.get(self)), () =>
+    NoReplySubjectError.make({ subject: self.subject }),
+  ).pipe(
+    Effect.flatMap((msg) =>
       Effect.sync(() =>
         msg.respond(
           options.payload,
           Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {},
         ),
-      ).pipe(
-        Effect.andThen((responded) =>
-          responded ? Effect.void : Effect.fail(NoReplySubjectError.make({ subject: self.subject })),
-        ),
       ),
-  });
+    ),
+    Effect.flatMap((responded) =>
+      responded ? Effect.void : Effect.fail(NoReplySubjectError.make({ subject: self.subject })),
+    ),
+  );

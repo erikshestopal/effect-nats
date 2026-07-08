@@ -15,6 +15,7 @@ import {
   Scope,
   Stream,
 } from "effect";
+import { identity } from "effect/Function";
 import { ServiceError, ServiceErrorCodeHeader, ServiceErrorHeader, Svcm } from "@nats-io/services/internal";
 import type { Payload, QueuedIterator } from "@nats-io/nats-core";
 import type {
@@ -31,7 +32,6 @@ import * as NatsMessage from "./NatsMessage.ts";
 import * as Errors from "./internal/errors.ts";
 import * as Iterators from "./internal/iterator.ts";
 
-/** @since 0.1.0 @category errors */
 export class EndpointError extends Schema.TaggedErrorClass<EndpointError>("effect-nats/NatsMicro/EndpointError")(
   "EndpointError",
   {
@@ -74,7 +74,6 @@ export interface MicroClient {
   readonly stats: (options?: DiscoverOptions) => Stream.Stream<ServiceStats, NatsError.NatsError>;
 }
 
-/** @since 0.1.0 @category constructors */
 export const make = Effect.fnUntraced(function* <R>(options: ServiceOptions<R>) {
   const nats = yield* NatsClient.NatsClient;
   const service = yield* Effect.acquireRelease(
@@ -127,7 +126,6 @@ export const layer = <R>(
   options: ServiceOptions<R>,
 ): Layer.Layer<never, NatsError.NatsError, NatsClient.NatsClient | R> => Layer.effectDiscard(make(options));
 
-/** @since 0.1.0 @category constructors */
 export const client: Effect.Effect<MicroClient, never, NatsClient.NatsClient> = Effect.map(
   NatsClient.NatsClient,
   (nats) => {
@@ -154,7 +152,7 @@ const runEndpoint = <R>(options: {
         ...(Predicate.isNotUndefined(options.endpoint.metadata) ? { metadata: options.endpoint.metadata } : {}),
       }),
     ),
-    transform: (message) => message,
+    transform: identity,
     onError: Errors.mapError,
   }).pipe(
     Stream.mapEffect(
@@ -203,7 +201,7 @@ const discover = <A>(acquire: () => Promise<QueuedIterator<A>>): Stream.Stream<A
       try: acquire,
       catch: Errors.mapError,
     }),
-    transform: (value) => value,
+    transform: identity,
     onError: Errors.mapError,
   });
 
@@ -222,17 +220,15 @@ const patchStats = (options: { readonly service: SdkService; readonly errorCount
   options.service.stats = () =>
     stats().then((serviceStats) => ({
       ...serviceStats,
-      ...Option.fromNullishOr(serviceStats.endpoints).pipe(
-        Option.match({
-          /* v8 ignore next -- SDK stats always include endpoints after service construction */
-          onNone: () => ({}),
-          onSome: (endpoints) => ({
-            endpoints: Arr.map(endpoints, (endpoint) => ({
-              ...endpoint,
-              num_errors: Num.sum(endpoint.num_errors, options.errorCounts[endpoint.name] ?? 0),
-            })),
-          }),
-        }),
+      ...Option.getOrElse(
+        Option.map(Option.fromNullishOr(serviceStats.endpoints), (endpoints) => ({
+          endpoints: Arr.map(endpoints, (endpoint) => ({
+            ...endpoint,
+            num_errors: Num.sum(endpoint.num_errors, options.errorCounts[endpoint.name] ?? 0),
+          })),
+        })),
+        /* v8 ignore next -- SDK stats always include endpoints after service construction */
+        () => ({}),
       ),
     }));
 };
@@ -245,7 +241,6 @@ const incrementError = (options: { readonly errorCounts: Record<string, number>;
 const release = (service: SdkService): Effect.Effect<void> =>
   Effect.tryPromise(() => service.stop()).pipe(Effect.asVoid, Effect.ignore);
 
-/** @since 0.1.0 @category errors */
 export { ServiceError, ServiceErrorCodeHeader, ServiceErrorHeader };
 
 export type { ServiceIdentity, ServiceInfo, ServiceStats };

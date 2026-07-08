@@ -17,6 +17,7 @@ import {
   Stream,
   String as Str,
 } from "effect";
+import { identity } from "effect/Function";
 import { Kvm, KvWatchInclude } from "@nats-io/kv";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import type { Payload } from "@nats-io/nats-core";
@@ -28,12 +29,10 @@ import * as NatsError from "./NatsError.ts";
 import * as Iterators from "./internal/iterator.ts";
 import * as JsErrors from "./internal/mapJsError.ts";
 
-/** @since 0.1.0 @category errors */
 export class BucketNotFoundError extends Schema.TaggedErrorClass<BucketNotFoundError>(
   "effect-nats/NatsKv/BucketNotFoundError",
 )("BucketNotFoundError", { bucket: Schema.String }) {}
 
-/** @since 0.1.0 @category errors */
 export class KeyExistsError extends Schema.TaggedErrorClass<KeyExistsError>("effect-nats/NatsKv/KeyExistsError")(
   "KeyExistsError",
   { key: Schema.String },
@@ -93,19 +92,15 @@ export interface Kv {
   readonly status: Effect.Effect<KvStatus, JetStreamError.JetStreamErrors>;
 }
 
-/** @since 0.1.0 @category services */
 export class NatsKv extends Context.Service<NatsKv, Kv>()("effect-nats/NatsKv") {}
 
 const decoder = new TextDecoder();
 
-/** @since 0.1.0 @category accessors */
 export const entryText = (entry: KvEntry): string => decoder.decode(entry.value);
 
-/** @since 0.1.0 @category accessors */
 export const entrySchemaJson = <S extends Schema.Top>(entry: KvEntry, schema: S) =>
   Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(entryText(entry));
 
-/** @since 0.1.0 @category constructors */
 export const open = Effect.fnUntraced(function* (bucket: string) {
   const js = yield* JetStream.JetStream;
   const sdk = yield* Effect.tryPromise({
@@ -118,7 +113,6 @@ export const open = Effect.fnUntraced(function* (bucket: string) {
   return kv;
 });
 
-/** @since 0.1.0 @category constructors */
 export const create = Effect.fnUntraced(function* (bucket: string, options: BucketOptions = {}) {
   const js = yield* JetStream.JetStream;
   const sdk = yield* Effect.tryPromise({
@@ -155,7 +149,6 @@ export const layer = (
 ): Layer.Layer<NatsKv, JetStreamError.JetStreamErrors, JetStream.JetStream> =>
   Layer.effect(NatsKv, create(bucket, options));
 
-/** @since 0.1.0 @category layers */
 export const layerKeyValueStore = (
   bucket: string,
   options: BucketOptions = {},
@@ -203,8 +196,8 @@ const makeBucket = (sdk: SdkKv): Kv => ({
       try: () => sdk.purge(key),
       catch: JsErrors.mapJetStreamError,
     }),
-  keys: (filter) => {
-    const stream: Stream.Stream<string, JetStreamError.JetStreamErrors> = Iterators.streamFromQueuedIterator<
+  keys: (filter) =>
+    Iterators.streamFromQueuedIterator<
       string,
       Awaited<ReturnType<SdkKv["keys"]>>,
       string,
@@ -214,11 +207,9 @@ const makeBucket = (sdk: SdkKv): Kv => ({
         try: () => sdk.keys(filter),
         catch: JsErrors.mapJetStreamError,
       }),
-      transform: (key) => key,
+      transform: identity,
       onError: JsErrors.mapJetStreamError,
-    });
-    return stream;
-  },
+    }),
   history: (options = {}) =>
     Iterators.streamFromQueuedIterator<
       SdkKvEntry,
@@ -262,17 +253,15 @@ const makeBucket = (sdk: SdkKv): Kv => ({
 const makeKeyValueStore = (kv: Kv): KeyValueStore.KeyValueStore =>
   KeyValueStore.make({
     get: (key) =>
-      kv
-        .get(key)
-        .pipe(Effect.map(Option.map(entryText)), Effect.map(Option.getOrUndefined), mapKvStoreError("get", key)),
+      kv.get(key).pipe(
+        Effect.map((entry) => Option.getOrUndefined(Option.map(entry, entryText))),
+        mapKvStoreError("get", key),
+      ),
     getUint8Array: (key) =>
-      kv
-        .get(key)
-        .pipe(
-          Effect.map(Option.map((entry) => entry.value)),
-          Effect.map(Option.getOrUndefined),
-          mapKvStoreError("getUint8Array", key),
-        ),
+      kv.get(key).pipe(
+        Effect.map((entry) => Option.getOrUndefined(Option.map(entry, (kvEntry) => kvEntry.value))),
+        mapKvStoreError("getUint8Array", key),
+      ),
     set: (key, value) => kv.put(key, value).pipe(Effect.asVoid, mapKvStoreError("set", key)),
     remove: (key) => kv.delete(key).pipe(mapKvStoreError("remove", key)),
     clear: kv.keys().pipe(
@@ -282,22 +271,21 @@ const makeKeyValueStore = (kv: Kv): KeyValueStore.KeyValueStore =>
     size: kv.keys().pipe(Stream.runCount, mapKvStoreError("size")),
   });
 
-const mapKvStoreError = (method: string, key?: string) =>
-  Predicate.isUndefined(key)
-    ? <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        effect.pipe(
-          Effect.mapError(
-            /* v8 ignore next */
-            (cause) => new KeyValueStore.KeyValueStoreError({ message: `NATS KV ${method} failed`, method, cause }),
-          ),
-        )
-    : <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        effect.pipe(
-          Effect.mapError(
-            (cause) =>
-              new KeyValueStore.KeyValueStoreError({ message: `NATS KV ${method} failed`, method, key, cause }),
-          ),
-        );
+const mapKvStoreError =
+  (method: string, key?: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.mapError(
+        /* v8 ignore next */
+        (cause) =>
+          new KeyValueStore.KeyValueStoreError({
+            message: `NATS KV ${method} failed`,
+            method,
+            ...(Predicate.isNotUndefined(key) ? { key } : {}),
+            cause,
+          }),
+      ),
+    );
 
 const fromSdkEntry =
   (isUpdate: boolean) =>

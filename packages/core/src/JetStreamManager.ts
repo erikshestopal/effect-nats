@@ -106,10 +106,8 @@ export interface Service {
   };
 }
 
-/** @since 0.1.0 @category services */
 export class JetStreamManager extends Context.Service<JetStreamManager, Service>()("effect-nats/JetStreamManager") {}
 
-/** @since 0.1.0 @category constructors */
 export const make = Effect.fnUntraced(function* (options: JetStream.JetStreamOptions = {}) {
   const nats = yield* NatsClient.NatsClient;
   const manager = yield* Effect.tryPromise({
@@ -204,7 +202,6 @@ const paginateLister = <A>(
     ),
   );
 
-/** @since 0.1.0 @category layers */
 export const layer = (
   options: JetStream.JetStreamOptions = {},
 ): Layer.Layer<

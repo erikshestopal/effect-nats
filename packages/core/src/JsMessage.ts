@@ -22,12 +22,10 @@ export class JsMessage extends Schema.Class<JsMessage>("effect-nats/JsMessage")(
   pending: Schema.Finite,
   time: Schema.DateTimeUtc,
 }) {
-  /** @since 0.1.0 */
   get text(): string {
     return decoder.decode(this.payload);
   }
 
-  /** @since 0.1.0 */
   json<S extends Schema.Top>(schema: S): Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]> {
     return Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(this.text);
   }
@@ -78,13 +76,10 @@ export interface Service {
 
 const decoder = new TextDecoder();
 
-/** @since 0.1.0 @category services */
 export class JsMessageService extends Context.Service<JsMessageService, Service>()("effect-nats/JsMessage") {}
 
-/** @since 0.1.0 @category guards */
 export const isJsMessage = Schema.is(JsMessage);
 
-/** @since 0.1.0 @category constructors */
 export const make = Effect.sync(() => {
   const sdkMessages = new WeakMap<JsMessage, JsMsg>();
 
@@ -96,7 +91,10 @@ export const make = Effect.sync(() => {
       subject: msg.subject,
       payload: msg.data,
       replyTo: Option.none(),
-      headers: Predicate.isNotUndefined(msg.headers) ? NatsHeaders.fromMsgHdrs(msg.headers) : NatsHeaders.empty,
+      headers: Option.getOrElse(
+        Option.map(Option.fromUndefinedOr(msg.headers), NatsHeaders.fromMsgHdrs),
+        () => NatsHeaders.empty,
+      ),
       stream: info.stream,
       consumer: info.consumer,
       seq: info.streamSequence,
@@ -151,5 +149,4 @@ export const make = Effect.sync(() => {
   });
 });
 
-/** @since 0.1.0 @category layers */
 export const layer: Layer.Layer<JsMessageService> = Layer.effect(JsMessageService, make);

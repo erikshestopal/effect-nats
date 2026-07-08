@@ -4,6 +4,7 @@
  * @since 0.1.0
  */
 import { Config, Context, Duration, Effect, Layer, Match, Option, Predicate, Schema, Stream } from "effect";
+import { identity } from "effect/Function";
 import type {
   ConnectionOptions,
   Msg,
@@ -252,12 +253,12 @@ export const make = Effect.fnUntraced(function* (options: Options = {}) {
           try: () => connection.subscribe(subject, options),
           catch: Errors.mapError,
         }),
-        transform: (message) => message,
+        transform: identity,
         onError: Errors.mapError,
         onRelease: releaseSubscription,
       }),
     subscribe: (subject, options = {}) =>
-      Iterator.streamFromQueuedIterator<Msg, Subscription, NatsMessage.NatsMessage, NatsError.NatsError>({
+      Iterator.streamFromQueuedIterator({
         acquire: Effect.try({
           try: () => connection.subscribe(subject, options),
           catch: Errors.mapError,
@@ -326,59 +327,20 @@ export const layer = (
 /**
  * Provides a scoped NATS client from `Config` values.
  *
+ * Accepts a {@link Config.Wrap} of {@link Options}, matching Effect SQL client
+ * `layerConfig` style: each field is a `Config`, and plain values such as
+ * `transformOptions` are wrapped with `Config.succeed`.
+ *
  * @see {@link make} for constructing the service effectfully
  * @see {@link layer} for explicit options
  *
  * @since 0.1.0
  * @category layers
  */
-export const layerConfig = (options: {
-  readonly servers?: Config.Config<string | ReadonlyArray<string>>;
-  readonly name?: Config.Config<string>;
-  readonly auth?: Config.Config<Auth>;
-  readonly timeout?: Config.Config<DurationInput>;
-  readonly pingInterval?: Config.Config<DurationInput>;
-  readonly maxPingOut?: Config.Config<number>;
-  readonly reconnect?: Config.Config<boolean | ReconnectOptions>;
-  readonly noEcho?: Config.Config<boolean>;
-  readonly inboxPrefix?: Config.Config<string>;
-  readonly tls?: Config.Config<TlsOptions>;
-  readonly ignoreClusterUpdates?: Config.Config<boolean>;
-  readonly transformOptions?: (options: ConnectionOptions) => ConnectionOptions;
-}): Layer.Layer<
+export const layerConfig = (
+  config: Config.Wrap<Options> = {},
+): Layer.Layer<
   NatsClient,
   NatsError.ConnectionError | NatsError.TimeoutError | Config.ConfigError,
   NatsConnector.NatsConnector
-> =>
-  Layer.effect(
-    NatsClient,
-    Effect.gen(function* () {
-      const servers = Predicate.isNotUndefined(options.servers) ? yield* options.servers : undefined;
-      const name = Predicate.isNotUndefined(options.name) ? yield* options.name : undefined;
-      const auth = Predicate.isNotUndefined(options.auth) ? yield* options.auth : undefined;
-      const timeout = Predicate.isNotUndefined(options.timeout) ? yield* options.timeout : undefined;
-      const pingInterval = Predicate.isNotUndefined(options.pingInterval) ? yield* options.pingInterval : undefined;
-      const maxPingOut = Predicate.isNotUndefined(options.maxPingOut) ? yield* options.maxPingOut : undefined;
-      const reconnect = Predicate.isNotUndefined(options.reconnect) ? yield* options.reconnect : undefined;
-      const noEcho = Predicate.isNotUndefined(options.noEcho) ? yield* options.noEcho : undefined;
-      const inboxPrefix = Predicate.isNotUndefined(options.inboxPrefix) ? yield* options.inboxPrefix : undefined;
-      const tls = Predicate.isNotUndefined(options.tls) ? yield* options.tls : undefined;
-      const ignoreClusterUpdates = Predicate.isNotUndefined(options.ignoreClusterUpdates)
-        ? yield* options.ignoreClusterUpdates
-        : undefined;
-      return yield* make({
-        ...(Predicate.isNotUndefined(servers) ? { servers } : {}),
-        ...(Predicate.isNotUndefined(name) ? { name } : {}),
-        ...(Predicate.isNotUndefined(auth) ? { auth } : {}),
-        ...(Predicate.isNotUndefined(timeout) ? { timeout } : {}),
-        ...(Predicate.isNotUndefined(pingInterval) ? { pingInterval } : {}),
-        ...(Predicate.isNotUndefined(maxPingOut) ? { maxPingOut } : {}),
-        ...(Predicate.isNotUndefined(reconnect) ? { reconnect } : {}),
-        ...(Predicate.isNotUndefined(noEcho) ? { noEcho } : {}),
-        ...(Predicate.isNotUndefined(inboxPrefix) ? { inboxPrefix } : {}),
-        ...(Predicate.isNotUndefined(tls) ? { tls } : {}),
-        ...(Predicate.isNotUndefined(ignoreClusterUpdates) ? { ignoreClusterUpdates } : {}),
-        ...(Predicate.isNotUndefined(options.transformOptions) ? { transformOptions: options.transformOptions } : {}),
-      });
-    }),
-  );
+> => Layer.effect(NatsClient, Config.unwrap(config).pipe(Effect.flatMap(make)));
