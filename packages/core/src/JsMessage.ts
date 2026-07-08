@@ -58,6 +58,10 @@ export interface Service {
   readonly working: (self: JsMessage) => Effect.Effect<void>;
   readonly term: (self: JsMessage, options?: TermOptions) => Effect.Effect<void>;
   readonly ackAck: (self: JsMessage) => Effect.Effect<boolean, NatsError.TimeoutError>;
+  readonly processWith: <A, E, R>(options: {
+    readonly handler: (msg: JsMessage) => Effect.Effect<A, E, R>;
+    readonly nakDelay?: DurationInput;
+  }) => (msg: JsMessage) => Effect.Effect<void, never, R>;
 }
 
 const decoder = new TextDecoder();
@@ -93,61 +97,47 @@ export const make = Effect.sync(() => {
     return message;
   };
 
+  const ack = (self: JsMessage) => Effect.sync(() => sdkMessage(self)?.ack());
+  const nak = (self: JsMessage, options: NakOptions = {}) =>
+    Effect.sync(() =>
+      sdkMessage(self)?.nak(Predicate.isUndefined(options.delay) ? undefined : Duration.toMillis(options.delay)),
+    );
+  const working = (self: JsMessage) => Effect.sync(() => sdkMessage(self)?.working());
+  const term = (self: JsMessage, options: TermOptions = {}) =>
+    Effect.sync(() => sdkMessage(self)?.term(options.reason));
+  const ackAck = (self: JsMessage) =>
+    Effect.tryPromise({
+      try: () => sdkMessage(self)?.ackAck() ?? Promise.resolve(false),
+      /* v8 ignore next */
+      catch: () => new NatsError.TimeoutError(),
+    });
+  const processWith =
+    <A, E, R>(options: {
+      readonly handler: (msg: JsMessage) => Effect.Effect<A, E, R>;
+      readonly nakDelay?: DurationInput;
+    }) =>
+    (msg: JsMessage): Effect.Effect<void, never, R> =>
+      options.handler(msg).pipe(
+        Effect.matchCauseEffect({
+          onFailure: (cause) =>
+            Cause.hasFails(cause)
+              ? nak(msg, Predicate.isUndefined(options.nakDelay) ? {} : { delay: options.nakDelay })
+              : term(msg).pipe(Effect.andThen(Effect.logError(cause))),
+          onSuccess: () => ack(msg),
+        }),
+        Effect.ignore,
+      );
+
   return JsMessageService.of({
     fromJsMsg,
-    ack: (self) => Effect.sync(() => sdkMessage(self)?.ack()),
-    nak: (self, options = {}) =>
-      Effect.sync(() =>
-        sdkMessage(self)?.nak(Predicate.isUndefined(options.delay) ? undefined : Duration.toMillis(options.delay)),
-      ),
-    working: (self) => Effect.sync(() => sdkMessage(self)?.working()),
-    term: (self, options = {}) => Effect.sync(() => sdkMessage(self)?.term(options.reason)),
-    ackAck: (self) =>
-      Effect.tryPromise({
-        try: () => sdkMessage(self)?.ackAck() ?? Promise.resolve(false),
-        /* v8 ignore next */
-        catch: () => new NatsError.TimeoutError(),
-      }),
+    ack,
+    nak,
+    working,
+    term,
+    ackAck,
+    processWith,
   });
 });
 
 /** @since 0.1.0 @category layers */
 export const layer: Layer.Layer<JsMessageService> = Layer.effect(JsMessageService, make);
-
-/** @since 0.1.0 @category acknowledgments */
-export const ack = (self: JsMessage): Effect.Effect<void, never, JsMessageService> =>
-  Effect.flatMap(JsMessageService, (messages) => messages.ack(self));
-
-/** @since 0.1.0 @category acknowledgments */
-export const nak = (self: JsMessage, options: NakOptions = {}): Effect.Effect<void, never, JsMessageService> =>
-  Effect.flatMap(JsMessageService, (messages) => messages.nak(self, options));
-
-/** @since 0.1.0 @category acknowledgments */
-export const working = (self: JsMessage): Effect.Effect<void, never, JsMessageService> =>
-  Effect.flatMap(JsMessageService, (messages) => messages.working(self));
-
-/** @since 0.1.0 @category acknowledgments */
-export const term = (self: JsMessage, options: TermOptions = {}): Effect.Effect<void, never, JsMessageService> =>
-  Effect.flatMap(JsMessageService, (messages) => messages.term(self, options));
-
-/** @since 0.1.0 @category acknowledgments */
-export const ackAck = (self: JsMessage): Effect.Effect<boolean, NatsError.TimeoutError, JsMessageService> =>
-  Effect.flatMap(JsMessageService, (messages) => messages.ackAck(self));
-
-/** @since 0.1.0 @category combinators */
-export const processWith =
-  <A, E, R>(options: {
-    readonly handler: (msg: JsMessage) => Effect.Effect<A, E, R>;
-    readonly nakDelay?: DurationInput;
-  }) =>
-  (msg: JsMessage): Effect.Effect<void, never, R | JsMessageService> =>
-    options.handler(msg).pipe(
-      Effect.matchCauseEffect({
-        onFailure: (cause) =>
-          Cause.hasFails(cause)
-            ? nak(msg, Predicate.isUndefined(options.nakDelay) ? {} : { delay: options.nakDelay })
-            : term(msg).pipe(Effect.andThen(Effect.logError(cause))),
-        onSuccess: () => ack(msg),
-      }),
-      Effect.ignore,
-    );
