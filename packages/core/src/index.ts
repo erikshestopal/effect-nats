@@ -9,3 +9,5 @@ export * as NatsError from "./NatsError.ts";
 export * as NatsHeaders from "./NatsHeaders.ts";
 export * as NatsMessage from "./NatsMessage.ts";
 export * as NodeConnector from "./NodeConnector.ts";
+export * as JetStream from "./JetStream.ts";
+export * as JetStreamError from "./JetStreamError.ts";
