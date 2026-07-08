@@ -4,6 +4,7 @@ Two-package Effect TS starter using Bun, Vite+ (`vp`), TypeScript 7 RC, tsgo, ox
 
 ## Conventions
 
+- Read `LEARNINGS.md` before continuing implementation work and before compacting or handing off context. Treat it as binding feedback about Effect API style and local review expectations.
 - All source and test code lives under `packages/*/src` and `packages/*/test`.
 - Use Effect APIs and data types first; avoid native JS helpers where ast-grep rules enforce Effect alternatives.
 - Prefer one options object over multiple positional parameters for exported functions.
