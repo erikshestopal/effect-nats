@@ -3,7 +3,7 @@
  *
  * @since 0.1.0
  */
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import { jetstream } from "@nats-io/jetstream";
 import type { Payload } from "@nats-io/nats-core";
 import type { JetStreamClient } from "@nats-io/jetstream";
@@ -54,12 +54,12 @@ export type PublishOptions = {
 };
 
 /** @since 0.1.0 @category models */
-export type PubAck = {
-  readonly stream: string;
-  readonly seq: number;
-  readonly duplicate: boolean;
-  readonly domain: Option.Option<string>;
-};
+export class PubAck extends Schema.Class<PubAck>("effect-nats/JetStream/PubAck")({
+  stream: Schema.String,
+  seq: Schema.Finite,
+  duplicate: Schema.Boolean,
+  domain: Schema.Option(Schema.String),
+}) {}
 
 /** @since 0.1.0 @category services */
 export class JetStream extends Context.Service<JetStream, Service>()("effect-nats/JetStream") {}
@@ -76,12 +76,14 @@ export const make = (options: JetStreamOptions = {}): Effect.Effect<Service, nev
           try: () => client.publish(subject, publishOptions.payload, JsOptions.translatePublishOptions(publishOptions)),
           catch: JsErrors.mapPublishError,
         }).pipe(
-          Effect.map((ack) => ({
-            stream: ack.stream,
-            seq: ack.seq,
-            duplicate: ack.duplicate,
-            domain: Option.fromNullishOr(ack.domain),
-          })),
+          Effect.map((ack) =>
+            PubAck.make({
+              stream: ack.stream,
+              seq: ack.seq,
+              duplicate: ack.duplicate,
+              domain: Option.fromNullishOr(ack.domain),
+            }),
+          ),
         ),
     });
   });

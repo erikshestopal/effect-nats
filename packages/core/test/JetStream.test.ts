@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Equal, Layer, Option } from "effect";
 import * as JetStream from "effect-nats/JetStream";
 import * as NatsClient from "effect-nats/NatsClient";
 import * as NodeConnector from "effect-nats/NodeConnector";
@@ -26,7 +26,12 @@ describe("JetStream", () => {
         }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
       );
 
-      assert.deepStrictEqual(ack, { stream: "PHASE6_PUB", seq: 1, duplicate: false, domain: Option.none() });
+      assert.isTrue(
+        Equal.equals(
+          ack,
+          JetStream.PubAck.make({ stream: "PHASE6_PUB", seq: 1, duplicate: false, domain: Option.none() }),
+        ),
+      );
     }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
   );
 
