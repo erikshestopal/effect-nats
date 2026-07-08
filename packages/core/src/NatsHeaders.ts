@@ -66,6 +66,18 @@ export const fromInput: (input?: Input) => NatsHeaders = (input) => {
   return make(headers);
 };
 
+export const fromMsgHdrs = (input: MsgHdrs): NatsHeaders => {
+  const headers = makeMsgHdrs();
+  for (const [key, values] of input) {
+    for (const value of values) {
+      headers.append(key, value);
+    }
+  }
+  return make(headers);
+};
+
+export const toMsgHdrs = (input: Input): MsgHdrs => raw(fromInput(input));
+
 const raw = (self: NatsHeaders): MsgHdrs => (self as HeaderView)[stateSymbol];
 
 /** @since 0.1.0 @category getters */

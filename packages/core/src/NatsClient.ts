@@ -3,9 +3,11 @@
  *
  * @since 0.1.0
  */
-import { Config, Context, Effect, Layer, Option, Predicate, Schema, Scope } from "effect";
-import type { ConnectionOptions, NatsConnection, TlsOptions } from "@nats-io/nats-core";
+import { Config, Context, Duration, Effect, Layer, Option, Predicate, Schema, Scope } from "effect";
+import type { ConnectionOptions, NatsConnection, Payload, TlsOptions } from "@nats-io/nats-core";
 import type { Input as DurationInput } from "effect/Duration";
+import * as NatsHeaders from "./NatsHeaders.ts";
+import * as NatsMessage from "./NatsMessage.ts";
 import * as NatsConnector from "./NatsConnector.ts";
 import * as NatsError from "./NatsError.ts";
 import * as Errors from "./internal/errors.ts";
@@ -15,7 +17,54 @@ import * as OptionsInternal from "./internal/options.ts";
 export interface Service {
   readonly connection: NatsConnection;
   readonly closed: Effect.Effect<Option.Option<NatsError.NatsError>>;
+  readonly publish: (
+    subject: string,
+    options?: PublishOptions,
+  ) => Effect.Effect<
+    void,
+    | NatsError.InvalidSubjectError
+    | NatsError.ClosedConnectionError
+    | NatsError.DrainingConnectionError
+    | NatsError.PermissionViolationError
+  >;
+  readonly flush: Effect.Effect<void, NatsError.ClosedConnectionError | NatsError.TimeoutError>;
+  readonly rtt: Effect.Effect<
+    Duration.Duration,
+    NatsError.ClosedConnectionError | NatsError.DrainingConnectionError | NatsError.TimeoutError
+  >;
+  readonly request: (
+    subject: string,
+    options?: RequestOptions,
+  ) => Effect.Effect<
+    NatsMessage.NatsMessage,
+    | NatsError.TimeoutError
+    | NatsError.NoRespondersError
+    | NatsError.RequestError
+    | NatsError.InvalidSubjectError
+    | NatsError.ClosedConnectionError
+    | NatsError.DrainingConnectionError
+  >;
 }
+
+/** @since 0.1.0 @category options */
+export type PublishOptions = {
+  readonly payload?: Payload;
+  readonly headers?: NatsHeaders.Input;
+  readonly replyTo?: string;
+};
+
+/** @since 0.1.0 @category options */
+export type RequestOptions = {
+  readonly payload?: Payload;
+  readonly headers?: NatsHeaders.Input;
+  /**
+   * The request deadline. Interrupting the returned Effect abandons the SDK promise; it does not cancel the
+   * server-side interest.
+   *
+   * @default "1 second"
+   */
+  readonly timeout?: DurationInput;
+};
 
 /** @since 0.1.0 @category services */
 export class NatsClient extends Context.Service<NatsClient, Service>()("effect-nats/NatsClient") {}
@@ -91,6 +140,32 @@ export const make = (
     return NatsClient.of({
       connection,
       closed: Effect.promise(() => connection.closed()).pipe(Effect.map(Errors.mapClosed)),
+      publish: (subject, options = {}) =>
+        Effect.try({
+          try: () =>
+            connection.publish(subject, options.payload, {
+              ...(Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {}),
+              ...(Predicate.isNotUndefined(options.replyTo) ? { reply: options.replyTo } : {}),
+            }),
+          catch: (cause) => Errors.mapPublishError({ subject, cause }),
+        }),
+      flush: Effect.tryPromise({
+        try: () => connection.flush(),
+        catch: Errors.mapFlushError,
+      }),
+      rtt: Effect.tryPromise({
+        try: () => connection.rtt(),
+        catch: Errors.mapRttError,
+      }).pipe(Effect.map(Duration.millis)),
+      request: (subject, options = {}) =>
+        Effect.tryPromise({
+          try: () =>
+            connection.request(subject, options.payload, {
+              timeout: Predicate.isNotUndefined(options.timeout) ? Duration.toMillis(options.timeout) : 1_000,
+              ...(Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {}),
+            }),
+          catch: (cause) => Errors.mapRequestError({ subject, cause }),
+        }).pipe(Effect.map(NatsMessage.fromMsg)),
     });
   });
 

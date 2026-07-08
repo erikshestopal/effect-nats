@@ -3,8 +3,8 @@
  *
  * @since 0.1.0
  */
-import { Effect, Schema } from "effect";
-import type { Payload } from "@nats-io/nats-core";
+import { Effect, Option, Predicate, Schema } from "effect";
+import type { Msg, Payload } from "@nats-io/nats-core";
 import * as NatsHeaders from "./NatsHeaders.ts";
 import { NoReplySubjectError } from "./NatsError.ts";
 
@@ -33,10 +33,36 @@ export type RespondOptions = {
 };
 
 const decoder = new TextDecoder();
+const sdkMessages = new WeakMap<NatsMessage, Msg>();
+
+export const fromMsg = (msg: Msg): NatsMessage => {
+  const message = NatsMessage.make({
+    subject: msg.subject,
+    payload: msg.data,
+    replyTo: Option.fromNullishOr(msg.reply),
+    headers: Predicate.isNotUndefined(msg.headers) ? NatsHeaders.fromMsgHdrs(msg.headers) : NatsHeaders.empty,
+  });
+  sdkMessages.set(message, msg);
+  return message;
+};
 
 /** @since 0.1.0 @category guards */
 export const isNatsMessage = Schema.is(NatsMessage);
 
 /** @since 0.1.0 @category combinators */
-export const respond = (self: NatsMessage, _options?: RespondOptions) =>
-  Effect.fail(NoReplySubjectError.make({ subject: self.subject }));
+export const respond = (self: NatsMessage, options: RespondOptions = {}) => {
+  const msg = sdkMessages.get(self);
+  if (Predicate.isUndefined(msg)) {
+    return Effect.fail(NoReplySubjectError.make({ subject: self.subject }));
+  }
+  return Effect.sync(() =>
+    msg.respond(
+      options.payload,
+      Predicate.isNotUndefined(options.headers) ? { headers: NatsHeaders.toMsgHdrs(options.headers) } : {},
+    ),
+  ).pipe(
+    Effect.andThen((responded) =>
+      responded ? Effect.void : Effect.fail(NoReplySubjectError.make({ subject: self.subject })),
+    ),
+  );
+};

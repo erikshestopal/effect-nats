@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Config, ConfigProvider, Effect, Layer, Option, Predicate, Redacted } from "effect";
+import { Clock, Config, ConfigProvider, Deferred, Duration, Effect, Layer, Option, Predicate, Redacted } from "effect";
 import {
   AuthorizationError,
   ClosedConnectionError,
@@ -11,11 +11,17 @@ import {
   UserAuthenticationExpiredError,
 } from "@nats-io/nats-core";
 import * as NatsClient from "effect-nats/NatsClient";
+import * as NatsError from "effect-nats/NatsError";
+import * as NatsHeaders from "effect-nats/NatsHeaders";
+import * as NatsMessage from "effect-nats/NatsMessage";
 import * as NatsConnector from "effect-nats/NatsConnector";
 import * as NodeConnector from "effect-nats/NodeConnector";
 import * as Errors from "../src/internal/errors.ts";
 import * as Options from "../src/internal/options.ts";
 import * as TestNatsServer from "./utils/TestNatsServer.ts";
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 const tcpClientLayer = (options: NatsClient.Options = {}) =>
   NatsClient.layer(options).pipe(Layer.provide(NodeConnector.layer));
@@ -288,4 +294,185 @@ describe("NatsClient", () => {
     assert.strictEqual(Option.getOrThrow(Errors.mapClosed(new NoRespondersError("missing")))._tag, "NoRespondersError");
     assert.strictEqual(Option.getOrThrow(Errors.mapClosed(new Error("unknown")))._tag, "ConnectionError");
   });
+
+  it.effect("publishes payload, headers, and reply subjects", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          const subscription = client.connection.subscribe("phase4.publish", { max: 1 });
+          yield* client.publish("phase4.publish", {
+            payload: encoder.encode("hello"),
+            headers: { "X-Test": "yes" },
+            replyTo: "_INBOX.reply",
+          });
+
+          const message = yield* Effect.promise(() => subscription[Symbol.asyncIterator]().next());
+          assert.strictEqual(message.done, false);
+          assert.strictEqual(decoder.decode(message.value.data), "hello");
+          assert.strictEqual(message.value.headers?.get("X-Test"), "yes");
+          assert.strictEqual(message.value.reply, "_INBOX.reply");
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("fails invalid publish subjects", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const error = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          return yield* Effect.flip(client.publish(""));
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+
+      assert.strictEqual(error._tag, "InvalidSubjectError");
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("fails publish after scope close with ClosedConnectionError", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const client = yield* Effect.scoped(
+        NatsClient.NatsClient.pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+
+      const error = yield* Effect.flip(client.publish("phase4.closed"));
+
+      assert.strictEqual(error._tag, "ClosedConnectionError");
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("flushes and measures rtt as an Effect Duration", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const rtt = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          yield* client.flush;
+          return yield* client.rtt;
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+
+      assert.isTrue(Duration.toMillis(rtt) >= 0);
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("requests and receives a typed NatsMessage response", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          client.connection.subscribe("phase4.request", {
+            max: 1,
+            callback: (_error, message) => {
+              if (Predicate.isNotUndefined(message)) {
+                message.respond(
+                  message.data,
+                  Predicate.isNotUndefined(message.headers) ? { headers: message.headers } : {},
+                );
+              }
+            },
+          });
+          const response = yield* client.request("phase4.request", {
+            payload: encoder.encode("ping"),
+            headers: { "X-Request": "yes" },
+          });
+
+          assert.match(response.subject, /^_INBOX\./);
+          assert.strictEqual(response.text, "ping");
+          assert.deepStrictEqual(NatsHeaders.get(response.headers, "X-Request"), Option.some("yes"));
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("responds through wrapped NatsMessage values", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          const runFork = Effect.runForkWith(yield* Effect.context<never>());
+          client.connection.subscribe("phase4.wrapped", {
+            max: 1,
+            callback: (_error, message) => {
+              if (Predicate.isNotUndefined(message)) {
+                runFork(
+                  NatsMessage.respond(NatsMessage.fromMsg(message), {
+                    payload: encoder.encode("wrapped"),
+                    headers: { "X-Wrapped": "yes" },
+                  }),
+                );
+              }
+            },
+          });
+
+          const response = yield* client.request("phase4.wrapped");
+
+          assert.strictEqual(response.text, "wrapped");
+          assert.deepStrictEqual(NatsHeaders.get(response.headers, "X-Wrapped"), Option.some("yes"));
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("surfaces no-reply failures from wrapped NatsMessage values", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          const error = yield* Deferred.make<NatsError.NoReplySubjectError>();
+          const runFork = Effect.runForkWith(yield* Effect.context<never>());
+          client.connection.subscribe("phase4.noReply", {
+            max: 1,
+            callback: (_callbackError, message) => {
+              if (Predicate.isNotUndefined(message)) {
+                runFork(
+                  Deferred.complete(
+                    error,
+                    Effect.flip(NatsMessage.respond(NatsMessage.fromMsg(message))).pipe(Effect.orDie),
+                  ),
+                );
+              }
+            },
+          });
+
+          yield* client.publish("phase4.noReply");
+          const failure = yield* Deferred.await(error);
+
+          assert.strictEqual(failure._tag, "NoReplySubjectError");
+          assert.strictEqual(failure.subject, "phase4.noReply");
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
+
+  it.effect("distinguishes no responders from request timeout", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* NatsClient.NatsClient;
+          const start = yield* Clock.currentTimeMillis;
+          const noResponders = yield* Effect.flip(client.request("phase4.noResponders", { timeout: "2 seconds" }));
+          const elapsed = (yield* Clock.currentTimeMillis) - start;
+          assert.strictEqual(noResponders._tag, "NoRespondersError");
+          if (Predicate.isTagged(noResponders, "NoRespondersError")) {
+            assert.strictEqual(noResponders.subject, "phase4.noResponders");
+          }
+          assert.isTrue(elapsed < 500);
+
+          const subscription = client.connection.subscribe("phase4.timeout", { max: 1 });
+          const timeout = yield* Effect.flip(client.request("phase4.timeout", { timeout: "50 millis" }));
+          subscription.unsubscribe();
+          assert.strictEqual(timeout._tag, "TimeoutError");
+        }).pipe(Effect.provide(tcpClientLayer({ servers: server.url }))),
+      );
+    }).pipe(Effect.provide(TestNatsServer.layer)),
+  );
 });
