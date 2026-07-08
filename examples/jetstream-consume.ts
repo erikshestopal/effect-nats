@@ -1,5 +1,5 @@
 /**
- * Scenario: continuous consume + processWith (nats.js 04/05/08 consume examples).
+ * Scenario: continuous consume + acked processing (nats.js 04/05/08 consume examples).
  *
  * Requires `nats-server -js`.
  * Run: `bun examples/jetstream-consume.ts`
@@ -17,7 +17,6 @@ const durable = "processor";
 const program = Effect.gen(function* () {
   const manager = yield* JetStreamManager.JetStreamManager;
   const js = yield* JetStream.JetStream;
-  const messages = yield* JsMessage.JsMessageService;
 
   yield* manager.streams.delete(stream).pipe(Effect.ignore);
   yield* manager.streams.add({ name: stream, subjects: [subject] });
@@ -33,16 +32,11 @@ const program = Effect.gen(function* () {
 
   const consumer = yield* js.consumer(stream, durable);
 
-  // processWith acks on success, naks/terms on failure — prefer this over manual ack.
+  // tapAck acks on success, naks/terms on failure — prefer this over manual ack.
   const processed = yield* consumer.consume({ maxMessages: 5 }).pipe(
     Stream.take(10),
-    Stream.mapEffect((message) =>
-      messages
-        .processWith({
-          handler: (msg) => Console.log("processing", msg.text),
-        })(message)
-        .pipe(Effect.as(message.text)),
-    ),
+    JsMessage.tapAck((msg) => Console.log("processing", msg.text)),
+    Stream.map((message) => message.text),
     Stream.runCollect,
   );
 

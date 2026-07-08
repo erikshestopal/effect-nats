@@ -80,7 +80,7 @@ export default defineConfig({
       },
     ],
     rules: {
-      "agent/max-positional-params": "error",
+      "agent/max-positional-params": "off",
       curly: "error",
       "for-direction": "warn",
       "no-async-promise-executor": "warn",

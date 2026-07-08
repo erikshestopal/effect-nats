@@ -177,7 +177,7 @@ describe("JetStream", () => {
     }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
   );
 
-  it.effect("ackAck confirms the first ack and suppresses redelivery", () =>
+  it.effect("confirmAck confirms the first ack and suppresses redelivery", () =>
     Effect.gen(function* () {
       const server = yield* TestNatsServer.TestNatsServer;
       const second = yield* Effect.scoped(
@@ -188,8 +188,7 @@ describe("JetStream", () => {
           yield* js.publish("phase7.ack");
           const consumer = yield* js.consumer("PHASE7_ACK", "durable");
           const message = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
-          const messages = yield* JsMessage.JsMessageService;
-          assert.strictEqual(yield* messages.ackAck(message), true);
+          assert.strictEqual(yield* JsMessage.confirmAck(message), true);
           return yield* consumer.next({ expires: "1 second" });
         }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
       );
@@ -254,11 +253,10 @@ describe("JetStream", () => {
             yield* js.publish("phase7.working");
             const consumer = yield* js.consumer("PHASE7_WORKING", "durable");
             const first = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
-            const messages = yield* JsMessage.JsMessageService;
             yield* Effect.sleep("100 millis");
-            yield* messages.working(first);
+            yield* JsMessage.working(first);
             yield* Effect.sleep("150 millis");
-            yield* messages.ack(first);
+            yield* JsMessage.ack(first);
             return yield* consumer.next({ expires: "1 second" });
           }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
         );
@@ -268,7 +266,7 @@ describe("JetStream", () => {
     { timeout: 10_000 },
   );
 
-  it.effect("processWith acks success and naks typed failures", () =>
+  it.effect("tapAck acks success and naks typed failures", () =>
     Effect.gen(function* () {
       const server = yield* TestNatsServer.TestNatsServer;
       const result = yield* Effect.scoped(
@@ -280,13 +278,21 @@ describe("JetStream", () => {
           yield* js.publish("phase7.process", { payload: encoder.encode("failure") });
           yield* js.publish("phase7.process", { payload: encoder.encode("failure-now") });
           const consumer = yield* js.consumer("PHASE7_PROCESS", "durable");
-          const messages = yield* JsMessage.JsMessageService;
           const success = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
-          yield* messages.processWith({ handler: () => Effect.void })(success);
+          yield* Stream.make(success).pipe(
+            JsMessage.tapAck(() => Effect.void),
+            Stream.runDrain,
+          );
           const failure = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
-          yield* messages.processWith({ handler: () => Effect.fail("bad"), nakDelay: "100 millis" })(failure);
+          yield* Stream.make(failure).pipe(
+            JsMessage.tapAck(() => Effect.fail("bad"), { nakDelay: "100 millis" }),
+            Stream.runDrain,
+          );
           const immediate = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
-          yield* messages.processWith({ handler: () => Effect.fail("bad") })(immediate);
+          yield* Stream.make(immediate).pipe(
+            JsMessage.tapAck(() => Effect.fail("bad")),
+            Stream.runDrain,
+          );
           const redelivery1 = yield* consumer.next({ expires: "1 second" }).pipe(Effect.map(Option.getOrThrow));
           const redelivery2 = yield* consumer.next({ expires: "1 second" }).pipe(Effect.map(Option.getOrThrow));
           return [redelivery1, redelivery2];
@@ -304,11 +310,35 @@ describe("JetStream", () => {
     }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
   );
 
-  it.effect("ackAck returns false for schema-made messages without an SDK reply", () =>
+  it.effect("mapEffectAcked emits handler values and acknowledges processed messages", () =>
+    Effect.gen(function* () {
+      const server = yield* TestNatsServer.TestNatsServer;
+      const result = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* withStream({ name: "PHASE7_MAP_ACKED", subjects: ["phase7.mapAcked"] });
+          yield* withConsumer({ stream: "PHASE7_MAP_ACKED", name: "durable" });
+          const js = yield* JetStream.JetStream;
+          yield* js.publish("phase7.mapAcked", { payload: encoder.encode("one") });
+          yield* js.publish("phase7.mapAcked", { payload: encoder.encode("two") });
+          const consumer = yield* js.consumer("PHASE7_MAP_ACKED", "durable");
+          const texts = yield* consumer.fetch({ maxMessages: 2, expires: "1 second" }).pipe(
+            JsMessage.mapEffectAcked((message) => Effect.succeed(message.text)),
+            Stream.runCollect,
+          );
+          const after = yield* consumer.next({ expires: "1 second" });
+          return { texts, after };
+        }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
+      );
+
+      assert.deepStrictEqual([...result.texts], ["one", "two"]);
+      assert.isTrue(Option.isNone(result.after));
+    }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
+  );
+
+  it.effect("confirmAck returns false for schema-made messages without an SDK reply", () =>
     Effect.gen(function* () {
       const time = yield* DateTime.now;
-      const messages = yield* JsMessage.JsMessageService;
-      const confirmed = yield* messages.ackAck(
+      const confirmed = yield* JsMessage.confirmAck(
         JsMessage.JsMessage.make({
           subject: "phase7.synthetic",
           payload: encoder.encode("synthetic"),
@@ -327,7 +357,7 @@ describe("JetStream", () => {
     }).pipe(Effect.provide(JsMessage.layer)),
   );
 
-  it.effect("processWith terms defects without failing", () =>
+  it.effect("tapAck terms defects without failing", () =>
     Effect.gen(function* () {
       const server = yield* TestNatsServer.TestNatsServer;
       const second = yield* Effect.scoped(
@@ -338,8 +368,10 @@ describe("JetStream", () => {
           yield* js.publish("phase7.defect");
           const consumer = yield* js.consumer("PHASE7_DEFECT", "durable");
           const message = yield* consumer.next().pipe(Effect.map(Option.getOrThrow));
-          const messages = yield* JsMessage.JsMessageService;
-          yield* messages.processWith({ handler: () => Effect.die("boom") })(message);
+          yield* Stream.make(message).pipe(
+            JsMessage.tapAck(() => Effect.die("boom")),
+            Stream.runDrain,
+          );
           return yield* consumer.next({ expires: "1 second" });
         }).pipe(Effect.provide(jetStreamLayer({ servers: server.url }))),
       );
@@ -373,7 +405,7 @@ describe("JetStream", () => {
     }).pipe(Effect.provide(TestNatsServer.layerJetStream)),
   );
 
-  it.effect("consume continuously refills pulls and lets processWith ack messages", () =>
+  it.effect("consume continuously refills pulls and lets tapAck ack messages", () =>
     Effect.gen(function* () {
       const server = yield* TestNatsServer.TestNatsServer;
       const result = yield* Effect.scoped(
@@ -385,14 +417,17 @@ describe("JetStream", () => {
             yield* js.publish("phase8.consume", { payload: encoder.encode(String(index)) });
           }
           const notifications = yield* Ref.make(0);
-          const messages = yield* JsMessage.JsMessageService;
           const consumer = yield* js.consumer("PHASE8_CONSUME", "durable");
           const consumed = yield* consumer
             .consume({
               maxMessages: 10,
               onNotification: () => Ref.update(notifications, Num.increment),
             })
-            .pipe(Stream.tap(messages.processWith({ handler: () => Effect.void })), Stream.take(50), Stream.runCollect);
+            .pipe(
+              JsMessage.tapAck(() => Effect.void),
+              Stream.take(50),
+              Stream.runCollect,
+            );
           const after = yield* consumer.next({ expires: "1 second" });
           const notificationCount = yield* Ref.get(notifications);
           return { consumed, after, notificationCount };
@@ -418,7 +453,6 @@ describe("JetStream", () => {
           const js = yield* JetStream.JetStream;
           yield* js.publish("phase8.notify", { payload: encoder.encode("one") });
           yield* js.publish("phase8.notify", { payload: encoder.encode("two") });
-          const messages = yield* JsMessage.JsMessageService;
           const consumer = yield* js.consumer("PHASE8_NOTIFY", "durable");
           return yield* consumer
             .consume({
@@ -426,7 +460,7 @@ describe("JetStream", () => {
               onNotification: () => Effect.die("ignored"),
             })
             .pipe(
-              Stream.tap(messages.processWith({ handler: () => Effect.void })),
+              JsMessage.tapAck(() => Effect.void),
               Stream.take(2),
               Stream.map((message) => message.text),
               Stream.runCollect,
@@ -447,10 +481,9 @@ describe("JetStream", () => {
           yield* withConsumer({ stream: "PHASE8_PLAIN", name: "durable" });
           const js = yield* JetStream.JetStream;
           yield* js.publish("phase8.plain", { payload: encoder.encode("plain") });
-          const messages = yield* JsMessage.JsMessageService;
           const consumer = yield* js.consumer("PHASE8_PLAIN", "durable");
           return yield* consumer.consume({ maxMessages: 1 }).pipe(
-            Stream.tap(messages.processWith({ handler: () => Effect.void })),
+            JsMessage.tapAck(() => Effect.void),
             Stream.take(1),
             Stream.runHead,
             Effect.map(Option.getOrThrow),

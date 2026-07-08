@@ -74,7 +74,7 @@ included in the root `tsconfig.json` so `bun run typecheck` covers them.
 | JetStream publish + msgID / expect  | `jetstream-publish.ts` |
 | JetStream manager streams/consumers | `jetstream-manager.ts` |
 | next + fetch batches                | `jetstream-pull.ts`    |
-| continuous consume + processWith    | `jetstream-consume.ts` |
+| continuous consume + acked handling | `jetstream-consume.ts` |
 | KV create/put/get/watch/history     | `kv.ts`                |
 | ObjectStore put/get/list            | `object-store.ts`      |
 | services multi-endpoint + discover  | `micro.ts`             |
@@ -82,6 +82,6 @@ included in the root `tsconfig.json` so `bun run typecheck` covers them.
 ## Notes
 
 - Prefer **Layers** and **Stream** over manual subscribe loops.
-- Prefer **`JsMessage.processWith`** for ack/nak/term instead of hand-rolled ack.
+- Prefer **`JsMessage.tapAck(handler)`** as a stream operator for ack/nak/term instead of hand-rolled ack.
 - JetStream examples create short-lived streams/buckets and clean up when possible.
 - These are teaching programs, not benchmarks (skip nats.js `bench` ports).

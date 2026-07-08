@@ -3,7 +3,8 @@
  *
  * @since 0.1.0
  */
-import { Cause, Context, DateTime, Duration, Effect, Layer, Option, Predicate, Schema } from "effect";
+import { Cause, Context, DateTime, Duration, Effect, Layer, Option, Predicate, Result, Schema, Stream } from "effect";
+import { dual, identity } from "effect/Function";
 import type { Input as DurationInput } from "effect/Duration";
 import type { JsMsg } from "@nats-io/jetstream";
 import * as NatsError from "./NatsError.ts";
@@ -39,8 +40,7 @@ export type TermOptions = {
   readonly reason?: string;
 };
 
-export type ProcessWithOptions = {
-  readonly handler: (msg: JsMessage) => Effect.Effect<unknown, unknown, unknown>;
+export type AckOptions = {
   readonly nakDelay?: DurationInput;
 };
 
@@ -49,12 +49,11 @@ export type ProcessWithOptions = {
  *
  * @example
  * ```ts
- * import { Effect } from "effect"
+ * import { Effect, Stream } from "effect"
  * import * as JsMessage from "effect-nats/JsMessage"
  *
- * const handle = (msg: JsMessage.JsMessage) => Effect.gen(function*() {
- *   const messages = yield* JsMessage.JsMessageService
- *   yield* messages.processWith({ handler: () => Effect.void })(msg)
+ * const handle = (messagesStream: Stream.Stream<JsMessage.JsMessage>) => Effect.gen(function*() {
+ *   yield* messagesStream.pipe(JsMessage.tapAck(() => Effect.void), Stream.runDrain)
  * })
  * ```
  *
@@ -67,11 +66,7 @@ export interface Service {
   readonly nak: (self: JsMessage, options?: NakOptions) => Effect.Effect<void>;
   readonly working: (self: JsMessage) => Effect.Effect<void>;
   readonly term: (self: JsMessage, options?: TermOptions) => Effect.Effect<void>;
-  readonly ackAck: (self: JsMessage) => Effect.Effect<boolean, NatsError.TimeoutError>;
-  readonly processWith: <A, E, R>(options: {
-    readonly handler: (msg: JsMessage) => Effect.Effect<A, E, R>;
-    readonly nakDelay?: DurationInput;
-  }) => (msg: JsMessage) => Effect.Effect<void, never, R>;
+  readonly confirmAck: (self: JsMessage) => Effect.Effect<boolean, NatsError.TimeoutError>;
 }
 
 const decoder = new TextDecoder();
@@ -79,6 +74,94 @@ const decoder = new TextDecoder();
 export class JsMessageService extends Context.Service<JsMessageService, Service>()("effect-nats/JsMessage") {}
 
 export const isJsMessage = Schema.is(JsMessage);
+
+export const ack = (self: JsMessage): Effect.Effect<void, never, JsMessageService> =>
+  Effect.flatMap(JsMessageService, (messages) => messages.ack(self));
+
+export const nak: {
+  (options?: NakOptions): (self: JsMessage) => Effect.Effect<void, never, JsMessageService>;
+  (self: JsMessage, options?: NakOptions): Effect.Effect<void, never, JsMessageService>;
+} = dual(
+  (args) => isJsMessage(args[0]),
+  (self: JsMessage, options?: NakOptions): Effect.Effect<void, never, JsMessageService> =>
+    Effect.flatMap(JsMessageService, (messages) => messages.nak(self, options)),
+);
+
+export const working = (self: JsMessage): Effect.Effect<void, never, JsMessageService> =>
+  Effect.flatMap(JsMessageService, (messages) => messages.working(self));
+
+export const term: {
+  (options?: TermOptions): (self: JsMessage) => Effect.Effect<void, never, JsMessageService>;
+  (self: JsMessage, options?: TermOptions): Effect.Effect<void, never, JsMessageService>;
+} = dual(
+  (args) => isJsMessage(args[0]),
+  (self: JsMessage, options?: TermOptions): Effect.Effect<void, never, JsMessageService> =>
+    Effect.flatMap(JsMessageService, (messages) => messages.term(self, options)),
+);
+
+export const confirmAck = (self: JsMessage): Effect.Effect<boolean, NatsError.TimeoutError, JsMessageService> =>
+  Effect.flatMap(JsMessageService, (messages) => messages.confirmAck(self));
+
+const nakOnFailure = (self: JsMessage, options?: AckOptions) =>
+  Predicate.isUndefined(options?.nakDelay) ? nak(self) : nak(self, { delay: options.nakDelay });
+
+const applyAckPolicy = <A, E, R>(
+  self: JsMessage,
+  effect: Effect.Effect<A, E, R>,
+  options?: AckOptions,
+): Effect.Effect<Result.Result<A, void>, never, R | JsMessageService> =>
+  effect.pipe(
+    Effect.matchCauseEffect({
+      onFailure: (cause) =>
+        Cause.hasFails(cause)
+          ? nakOnFailure(self, options).pipe(Effect.as(Result.fail(undefined)))
+          : term(self).pipe(Effect.andThen(Effect.logError(cause)), Effect.as(Result.fail(undefined))),
+      onSuccess: (value) => ack(self).pipe(Effect.as(Result.succeed(value))),
+    }),
+  );
+
+export const tapAck: {
+  <A, E2, R2>(
+    f: (message: JsMessage) => Effect.Effect<A, E2, R2>,
+    options?: AckOptions,
+  ): <E, R>(self: Stream.Stream<JsMessage, E, R>) => Stream.Stream<JsMessage, E, R | R2 | JsMessageService>;
+  <E, R, A, E2, R2>(
+    self: Stream.Stream<JsMessage, E, R>,
+    f: (message: JsMessage) => Effect.Effect<A, E2, R2>,
+    options?: AckOptions,
+  ): Stream.Stream<JsMessage, E, R | R2 | JsMessageService>;
+} = dual(
+  (args) => Stream.isStream(args[0]),
+  <E, R, A, E2, R2>(
+    self: Stream.Stream<JsMessage, E, R>,
+    f: (message: JsMessage) => Effect.Effect<A, E2, R2>,
+    options?: AckOptions,
+  ): Stream.Stream<JsMessage, E, R | R2 | JsMessageService> =>
+    self.pipe(Stream.tap((message) => applyAckPolicy(message, f(message), options).pipe(Effect.asVoid))),
+);
+
+export const mapEffectAcked: {
+  <A, E2, R2>(
+    f: (message: JsMessage) => Effect.Effect<A, E2, R2>,
+    options?: AckOptions,
+  ): <E, R>(self: Stream.Stream<JsMessage, E, R>) => Stream.Stream<A, E, R | R2 | JsMessageService>;
+  <E, R, A, E2, R2>(
+    self: Stream.Stream<JsMessage, E, R>,
+    f: (message: JsMessage) => Effect.Effect<A, E2, R2>,
+    options?: AckOptions,
+  ): Stream.Stream<A, E, R | R2 | JsMessageService>;
+} = dual(
+  (args) => Stream.isStream(args[0]),
+  <E, R, A, E2, R2>(
+    self: Stream.Stream<JsMessage, E, R>,
+    f: (message: JsMessage) => Effect.Effect<A, E2, R2>,
+    options?: AckOptions,
+  ): Stream.Stream<A, E, R | R2 | JsMessageService> =>
+    self.pipe(
+      Stream.mapEffect((message) => applyAckPolicy(message, f(message), options)),
+      Stream.filterMap(identity),
+    ),
+);
 
 export const make = Effect.sync(() => {
   const sdkMessages = new WeakMap<JsMessage, JsMsg>();
@@ -115,37 +198,19 @@ export const make = Effect.sync(() => {
   const working = (self: JsMessage) => Effect.sync(() => sdkMessage(self)?.working());
   const term = (self: JsMessage, options: TermOptions = {}) =>
     Effect.sync(() => sdkMessage(self)?.term(options.reason));
-  const ackAck = (self: JsMessage) =>
+  const confirmAck = (self: JsMessage) =>
     Effect.tryPromise({
       try: () => sdkMessage(self)?.ackAck() ?? Promise.resolve(false),
       /* v8 ignore next */
       catch: () => new NatsError.TimeoutError(),
     });
-  const processWith =
-    <A, E, R>(options: {
-      readonly handler: (msg: JsMessage) => Effect.Effect<A, E, R>;
-      readonly nakDelay?: DurationInput;
-    }) =>
-    (msg: JsMessage): Effect.Effect<void, never, R> =>
-      options.handler(msg).pipe(
-        Effect.matchCauseEffect({
-          onFailure: (cause) =>
-            Cause.hasFails(cause)
-              ? nak(msg, Predicate.isUndefined(options.nakDelay) ? {} : { delay: options.nakDelay })
-              : term(msg).pipe(Effect.andThen(Effect.logError(cause))),
-          onSuccess: () => ack(msg),
-        }),
-        Effect.ignore,
-      );
-
   return JsMessageService.of({
     fromJsMsg,
     ack,
     nak,
     working,
     term,
-    ackAck,
-    processWith,
+    confirmAck,
   });
 });
 

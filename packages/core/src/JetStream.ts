@@ -36,10 +36,9 @@ import * as JsErrors from "./internal/mapJsError.ts";
  * const program = Effect.gen(function*() {
  *   const js = yield* JetStream.JetStream
  *   yield* js.publish("orders.created")
- *   const messages = yield* JsMessage.JsMessageService
  *   const consumer = yield* js.consumer("ORDERS", "processor")
  *   yield* consumer.consume().pipe(
- *     Stream.mapEffect((msg) => messages.processWith({ handler: () => Effect.void })(msg)),
+ *     JsMessage.tapAck(() => Effect.void),
  *     Stream.runDrain
  *   )
  * })
